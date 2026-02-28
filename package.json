@@ -1,0 +1,38 @@
+{
+  "name": "mantle-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for AI-driven Mantle L2 development - chain reads, simulation, and unsigned transaction building",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mantle-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "SERVER_INSTRUCTIONS.md",
+    "README.md"
+  ],
+  "mcp": {
+    "serverUseInstructions": "Mantle L2 chain tools. Gas token is MNT, not ETH. CRITICAL RULES: (1) NEVER hold or request private keys - all transaction tools return unsigned payloads only. (2) ALWAYS call mantle_resolveAddress or mantle_resolveToken to verify addresses before using them in transaction-building tools; for token symbols, mantle_resolveToken must double-check against https://token-list.mantle.xyz. (3) ALWAYS ensure a fresh simulation result before presenting a transaction for signing (for mantle_build*Tx, use the returned simulation field; use mantle_simulateTx for custom calldata or re-simulation). (4) ALWAYS present the human_summary field to the user and obtain explicit confirmation before any signing step. (5) Gas estimates and native balances are in MNT. (6) When an address cannot be resolved through the registry, STOP and ask the user rather than proceeding with an unverified address."
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "viem": "^2.39.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.58",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

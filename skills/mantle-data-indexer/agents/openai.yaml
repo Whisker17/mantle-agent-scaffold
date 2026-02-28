@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mantle Data Indexer"
+  short_description: "Query Mantle historical data via indexers"
+  default_prompt: "Use $mantle-data-indexer to retrieve and summarize Mantle historical activity from GraphQL or SQL indexers."

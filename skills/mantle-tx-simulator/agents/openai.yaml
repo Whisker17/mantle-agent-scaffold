@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mantle Tx Simulator"
+  short_description: "Simulate Mantle transactions pre-broadcast"
+  default_prompt: "Use $mantle-tx-simulator to simulate a Mantle transaction and summarize expected state changes in WYSIWYS format."

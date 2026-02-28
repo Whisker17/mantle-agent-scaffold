@@ -1,0 +1,30 @@
+import { describe, expect, it } from "vitest";
+import { listResources, readResource } from "../src/resources.js";
+
+describe("resources", () => {
+  it("lists required v0.1 resources", () => {
+    const uris = listResources().map((resource) => resource.uri).sort();
+    expect(uris).toEqual([
+      "mantle://chain/mainnet",
+      "mantle://chain/sepolia",
+      "mantle://registry/contracts",
+      "mantle://registry/protocols",
+      "mantle://registry/tokens"
+    ]);
+  });
+
+  it("returns mainnet chain config resource payload", () => {
+    const result = readResource("mantle://chain/mainnet");
+    expect(result).not.toBeNull();
+    const payload = JSON.parse(result!.content);
+    expect(payload.chain_id).toBe(5000);
+    expect(payload.native_token.symbol).toBe("MNT");
+  });
+
+  it("returns protocol registry with Ondo marked planned", () => {
+    const result = readResource("mantle://registry/protocols");
+    expect(result).not.toBeNull();
+    const payload = JSON.parse(result!.content);
+    expect(payload.mainnet.ondo.status).toBe("planned");
+  });
+});

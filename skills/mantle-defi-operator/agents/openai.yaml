@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mantle DeFi Operator"
+  short_description: "Execute Mantle DeFi swaps and LP flows"
+  default_prompt: "Use $mantle-defi-operator to execute a Mantle DeFi operation with quote, allowance, and receipt checks."
