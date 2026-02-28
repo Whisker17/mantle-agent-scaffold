@@ -1,8 +1,8 @@
-# mantle-mcp (v0.1-core)
+# mantle-mcp (v0.2-readplus)
 
 MCP server for Mantle L2 with stdio transport and core read-only tools.
 
-## Implemented in v0.1
+## Implemented in v0.2
 
 - Server/transport:
   - `src/index.ts`

@@ -224,7 +224,7 @@ export const accountTools: Record<string, Tool> = {
   getBalance: {
     name: "mantle_getBalance",
     description:
-      "Get native MNT balance for an address. Examples: address=0x1111111111111111111111111111111111111111; common gas-spend workflows include Agni router interactions at 0x319B69888b0d11cEC22caA5034e25FfFBDc88421.",
+      "Get native MNT balance for an address. Examples: address=0x458F293454fE0d67EC0655f3672301301DD51422 -> balance_mnt='1.5' before contract operations.",
     inputSchema: {
       type: "object",
       properties: {

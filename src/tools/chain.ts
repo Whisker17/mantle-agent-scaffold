@@ -92,7 +92,7 @@ export const chainTools: Record<string, Tool> = {
   getChainStatus: {
     name: "mantle_getChainStatus",
     description:
-      "Return live block height and gas price from Mantle RPC. Examples: mainnet status for USDC market context at 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9; sepolia status for WMNT at 0x19f5557E23e9914A18239990f6C70D68FDF0deD5.",
+      "Return live block height and gas price from Mantle RPC. Examples: mainnet block_number=12345678 and gas_price_gwei=\"0.02\"; sepolia health check before running token workflows.",
     inputSchema: {
       type: "object",
       properties: {

@@ -3153,6 +3153,7 @@ class MantleMcpError extends Error {
 | Code | Meaning | Typical Trigger |
 |------|---------|----------------|
 | `INVALID_INPUT` | Input schema or required value validation failed | Empty token list in `mantle_getTokenPrices`; missing required structured fields |
+| `PROMPT_NOT_FOUND` | Requested prompt does not exist | `GetPromptRequestSchema` with unknown prompt name |
 | `INVALID_ADDRESS` | Malformed or non-checksummed address | Bad input to any address parameter |
 | `ZERO_ADDRESS` | Zero address provided where non-zero required | Transfer/approve to 0x000...000 |
 | `ADDRESS_NOT_FOUND` | No registry match for identifier | `mantle_resolveAddress` with unknown key |
@@ -3293,7 +3294,8 @@ An address that does not pass this chain should never be used in transaction-bui
 | `MANTLE_MCP_TRANSPORT` | No | `stdio` | Transport: `stdio` or `http` |
 | `MANTLE_MCP_PORT` | No | `3100` | HTTP transport port (ignored for stdio) |
 | `MANTLE_EXPLORER_API_KEY` | No | (none) | Mantlescan API key for verification tools |
-| `MANTLE_INDEXER_MAX_ROWS` | No | `1000` | Max rows returned by indexer queries |
+| `MANTLE_INDEXER_MAX_ROWS` | No | `1000` | Max rows returned by indexer SQL queries |
+| `MANTLE_SUBGRAPH_MAX_RESPONSE_BYTES` | No | `1048576` | Max subgraph response payload size in bytes before request is rejected |
 | `MANTLE_SIMULATION_BACKEND` | No | `rpc` | Simulation backend: `rpc` or `tenderly` |
 | `LENDING_HF_MIN_BLOCK` | No | `1.0` | Block threshold for projected post-action lending health factor (clamped to >= 1.0 hard floor) |
 | `LENDING_HF_MIN_WARN` | No | `1.5` | Warn threshold for projected post-action lending health factor |

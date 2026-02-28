@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { CHAIN_CONFIGS } from "./config/chains.js";
 import { getRegistryData } from "./lib/registry.js";
 import { MANTLE_TOKENS } from "./config/tokens.js";
@@ -34,8 +36,25 @@ const RESOURCES: Resource[] = [
     name: "Mantle DeFi Protocol Registry",
     description: "Protocol metadata for enabled and planned Mantle integrations.",
     mimeType: "application/json"
+  },
+  {
+    uri: "mantle://docs/network-basics",
+    name: "Mantle Network Basics",
+    description: "Network fundamentals from mantle-network-primer references.",
+    mimeType: "text/markdown"
+  },
+  {
+    uri: "mantle://docs/risk-checklist",
+    name: "Transaction Risk Checklist",
+    description: "Pre-execution risk checklist from mantle-risk-evaluator references.",
+    mimeType: "text/markdown"
   }
 ];
+
+function readReference(relativePath: string): string {
+  const absolutePath = path.resolve(process.cwd(), relativePath);
+  return readFileSync(absolutePath, "utf8");
+}
 
 export function listResources(): Resource[] {
   return RESOURCES;
@@ -74,6 +93,20 @@ export function readResource(uri: string): { content: string; mimeType: string }
     return {
       content: JSON.stringify(MANTLE_PROTOCOLS, null, 2),
       mimeType: "application/json"
+    };
+  }
+
+  if (uri === "mantle://docs/network-basics") {
+    return {
+      content: readReference("skills/mantle-network-primer/references/mantle-network-basics.md"),
+      mimeType: "text/markdown"
+    };
+  }
+
+  if (uri === "mantle://docs/risk-checklist") {
+    return {
+      content: readReference("skills/mantle-risk-evaluator/references/risk-checklist.md"),
+      mimeType: "text/markdown"
     };
   }
 

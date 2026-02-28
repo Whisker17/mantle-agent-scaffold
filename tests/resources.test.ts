@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { listResources, readResource } from "../src/resources.js";
 
 describe("resources", () => {
-  it("lists required v0.1 resources", () => {
+  it("lists required v0.2 resources", () => {
     const uris = listResources().map((resource) => resource.uri).sort();
     expect(uris).toEqual([
       "mantle://chain/mainnet",
       "mantle://chain/sepolia",
+      "mantle://docs/network-basics",
+      "mantle://docs/risk-checklist",
       "mantle://registry/contracts",
       "mantle://registry/protocols",
       "mantle://registry/tokens"
@@ -26,5 +28,16 @@ describe("resources", () => {
     expect(result).not.toBeNull();
     const payload = JSON.parse(result!.content);
     expect(payload.mainnet.ondo.status).toBe("planned");
+  });
+
+  it("returns network basics and risk checklist docs", () => {
+    const basics = readResource("mantle://docs/network-basics");
+    const checklist = readResource("mantle://docs/risk-checklist");
+    expect(basics).not.toBeNull();
+    expect(checklist).not.toBeNull();
+    expect(basics!.mimeType).toBe("text/markdown");
+    expect(checklist!.mimeType).toBe("text/markdown");
+    expect(basics!.content).toContain("Mantle Network Basics");
+    expect(checklist!.content).toContain("Risk Checklist");
   });
 });

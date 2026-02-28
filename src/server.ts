@@ -8,15 +8,14 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema
 } from "@modelcontextprotocol/sdk/types.js";
-import { MantleMcpError } from "./errors.js";
-import { toErrorPayload } from "./errors.js";
+import { MantleMcpError, toErrorPayload } from "./errors.js";
 import { getPromptMessages, prompts } from "./prompts.js";
 import { listResources, prefetchResources, readResource } from "./resources.js";
 import { allTools } from "./tools/index.js";
 
 export function createServer(): Server {
   const server = new Server(
-    { name: "mantle-mcp", version: "0.1.0" },
+    { name: "mantle-mcp", version: "0.2.0" },
     {
       capabilities: {
         tools: {},
@@ -109,7 +108,7 @@ export function createServer(): Server {
 export async function runServer(): Promise<void> {
   const transportMode = process.env.MANTLE_MCP_TRANSPORT ?? "stdio";
   if (transportMode !== "stdio") {
-    throw new Error("v0.1 supports only stdio transport. Set MANTLE_MCP_TRANSPORT=stdio.");
+    throw new Error("Only stdio transport is currently supported. Set MANTLE_MCP_TRANSPORT=stdio.");
   }
 
   const server = createServer();

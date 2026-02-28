@@ -61,28 +61,30 @@
 
 ## 3. v0.2-readplus（DeFi 只读与分析）
 
+- [x] v0.2-readplus 已完成并通过审计修复（2026-03-01）
+
 ### 3.1 DeFi Read + Indexer
-- [ ] `mantle_getSwapQuote`（Agni/Merchant Moe）
-- [ ] `mantle_getPoolLiquidity`
-- [ ] `mantle_getLendingMarkets`（v1 范围仅 Aave v3）
-- [ ] `mantle_querySubgraph`
-- [ ] `mantle_queryIndexerSql`
+- [x] `mantle_getSwapQuote`（Agni/Merchant Moe）
+- [x] `mantle_getPoolLiquidity`
+- [x] `mantle_getLendingMarkets`（v1 范围仅 Aave v3）
+- [x] `mantle_querySubgraph`
+- [x] `mantle_queryIndexerSql`
 
 ### 3.2 诊断工具（只读）
-- [ ] `mantle_checkRpcHealth`
-- [ ] `mantle_probeEndpoint`
+- [x] `mantle_checkRpcHealth`
+- [x] `mantle_probeEndpoint`
 
 ### 3.3 Prompt/Resource 先行版本
-- [ ] `mantle_portfolioAudit`
-- [ ] `mantle_mantleBasics`
-- [ ] `mantle_gasConfiguration`
-- [ ] `mantle://docs/network-basics`
-- [ ] `mantle://docs/risk-checklist`
+- [x] `mantle_portfolioAudit`
+- [x] `mantle_mantleBasics`
+- [x] `mantle_gasConfiguration`
+- [x] `mantle://docs/network-basics`
+- [x] `mantle://docs/risk-checklist`
 
 ### 3.4 验收
-- [ ] 组合分析流程可输出余额 + allowance + USD 估值
-- [ ] DeFi 只读路径不触发写操作
-- [ ] `total_liquidity_usd`/`tvl_usd` 为 null 时有明确降级行为
+- [x] 组合分析流程可输出余额 + allowance + USD 估值
+- [x] DeFi 只读路径不触发写操作
+- [x] `total_liquidity_usd`/`tvl_usd` 为 null 时有明确降级行为
 
 ---
 
