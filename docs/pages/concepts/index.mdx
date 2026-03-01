@@ -1,0 +1,34 @@
+# Concepts Overview
+
+This section explains the high-level model behind Mantle MCP up to v0.2.5.
+
+## What Mantle MCP Is
+
+Mantle MCP is a **tool server** that exposes Mantle L2 read and analysis capabilities to AI agents through the Model Context Protocol (MCP).
+
+The system is built around a strict operational boundary:
+
+- tools provide structured, deterministic outputs
+- agents orchestrate tool usage from natural language
+- security and correctness are enforced at the tool layer
+
+## Design Priorities
+
+### 1. Read-First Safety
+
+The current scope emphasizes read-only and analysis workflows. Even when transaction-oriented capabilities are discussed in roadmap context, safety rules and validation gates are treated as first-class constraints.
+
+### 2. Predictable Contracts
+
+Each tool has explicit input schema, stable output shape, and typed error semantics. This is what allows scenario-based E2E testing to catch regressions in tool selection and argument inference.
+
+### 3. Agent Usability
+
+Descriptions, schemas, and prompts are written to maximize correct tool routing by LLMs. v0.2.5 specifically strengthens this with scenario-scoped tool exposure and tighter E2E assertions.
+
+## Key Conceptual Layers
+
+1. **MCP Server Layer**: registry of tools/resources/prompts and request handling.
+2. **Domain Tool Layer**: chain, token, account, DeFi read, indexer, diagnostics.
+3. **Policy Layer**: endpoint allowlists, input validation, read-only SQL restrictions.
+4. **Evaluation Layer**: unit tests plus E2E agent scenarios and release gate logic.

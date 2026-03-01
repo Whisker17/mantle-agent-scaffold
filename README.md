@@ -1,4 +1,4 @@
-# mantle-mcp (v0.2-readplus)
+# mantle-mcp (v0.2.6)
 
 MCP server for Mantle L2 with stdio transport and core read-only tools.
 
@@ -67,6 +67,30 @@ npm run test:e2e
 Notes:
 - `npm run test:e2e` does not auto-load `.env`; you need to export env vars before running.
 - OpenRouter mode uses provider-compatible settings in runner (no `stopWhen`).
+
+## Documentation Site (Nextra)
+
+- Source: `docs/`
+- Local dev:
+
+```bash
+npm run docs:dev
+```
+
+- Production build:
+
+```bash
+npm run docs:build
+```
+
+- GitHub Pages URL (after deployment):
+  - `https://whisker17.github.io/mantle-agent-scaffold/`
+
+### GitHub Pages Deployment
+
+- Workflow: `.github/workflows/docs-pages.yml`
+- Trigger: push to `main` that changes `docs/**` (or manual workflow dispatch)
+- Build output: static export from `docs/out`
 
 ## Example MCP Client Config
 

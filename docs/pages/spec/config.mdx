@@ -1,0 +1,50 @@
+# Configuration and Operations
+
+## Root Project (MCP)
+
+Common root scripts:
+
+- `npm run build`
+- `npm test -- --run`
+- `npm run typecheck`
+- `npm run test:e2e`
+
+## E2E Environment Variables
+
+Required:
+
+- `E2E_LLM_PROVIDER`
+- `E2E_LLM_API_KEY`
+
+Optional:
+
+- `E2E_LLM_MODEL`
+- `E2E_TIMEOUT_MS`
+- `E2E_MAX_RETRIES`
+- `E2E_OPENROUTER_SITE_URL`
+- `E2E_OPENROUTER_APP_NAME`
+- `E2E_SUBGRAPH_ENDPOINT`
+- `E2E_SQL_ENDPOINT`
+
+## Important Operational Note
+
+`npm run test:e2e` does **not** auto-load `.env`.
+Use shell export/source before running.
+
+Typical command sequence:
+
+```bash
+set -a
+source .env
+set +a
+unset E2E_SUBGRAPH_ENDPOINT E2E_SQL_ENDPOINT
+npm run test:e2e
+```
+
+## Docs Site Commands
+
+Inside `docs/`:
+
+- `npm install`
+- `npm run dev`
+- `npm run build`

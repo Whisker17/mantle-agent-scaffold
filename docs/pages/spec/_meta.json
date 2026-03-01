@@ -1,0 +1,7 @@
+{
+  "index": "Spec Overview",
+  "server": "Server and Runtime",
+  "e2e": "E2E Test Spec",
+  "tooling": "Tool Surface (v0.2.5)",
+  "config": "Configuration and Operations"
+}
