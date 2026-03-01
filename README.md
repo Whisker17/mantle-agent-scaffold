@@ -94,6 +94,54 @@ Practical workflow:
 3. Follow the skill checklist.
 4. Execute with mantle-mcp tools/resources/prompts.
 
+## External Agents: Required Usage Contract
+
+If you are integrating an external MCP-capable agent (for example, a hosted assistant runtime, IDE agent, or custom orchestration service), follow this contract.
+
+### 1. Connect to `mantle-mcp`
+
+Use stdio transport and launch `dist/index.js`:
+
+```json
+{
+  "mcpServers": {
+    "mantle": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "MANTLE_MCP_TRANSPORT": "stdio",
+        "MANTLE_RPC_URL": "https://rpc.mantle.xyz",
+        "MANTLE_SEPOLIA_RPC_URL": "https://rpc.sepolia.mantle.xyz"
+      }
+    }
+  }
+}
+```
+
+### 2. Load skills from this repository
+
+External agents should treat `skills/` as workflow policy, not optional reference text:
+
+1. Select skill by user intent.
+2. Read `skills/<skill-name>/SKILL.md` before tool calls.
+3. Apply the checklist and guardrails from that skill.
+4. Use MCP outputs as source-of-truth for the final answer.
+
+### 3. Mandatory call sequence for reliable results
+
+1. `listTools`, `listResources`, `listPrompts`
+2. `readResource` / `getPrompt` for needed context
+3. `callTool` with schema-valid args
+4. Summarize using tool outputs (never fabricate addresses, chain state, or prices)
+
+### 4. Safety minimums for external agents
+
+- Resolve identifiers first: `mantle_resolveAddress`, `mantle_resolveToken`
+- Use `mantle_getChainStatus` before time-sensitive outputs
+- For user-provided endpoints, rely on indexer/diagnostics policy checks
+- Treat null prices as unknown, not zero
+
 ## URL and Interface Quick Reference
 
 MCP interface purpose:
