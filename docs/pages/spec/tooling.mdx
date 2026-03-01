@@ -1,44 +1,41 @@
-# Tool Surface (v0.2.5)
+# Tool Surface (v0.2.6)
 
-## Tool Modules
+`mantle-mcp` currently exposes **17 tools** across 7 domains.
 
-### Chain
-- `mantle_getChainInfo`
-- `mantle_getChainStatus`
+## Tool Contracts
 
-### Registry
-- `mantle_resolveAddress`
-- `mantle_validateAddress`
+| Tool | Domain | Primary Purpose | Key Inputs | Main Output Signals |
+| --- | --- | --- | --- | --- |
+| `mantle_getChainInfo` | Chain | Return static network config | `network?` | `chain_id`, `rpc_url`, `explorer_url`, `bridge_url`, `wrapped_mnt` |
+| `mantle_getChainStatus` | Chain | Read live chain status from RPC | `network?` | `block_number`, `gas_price_gwei`, `chain_id` |
+| `mantle_resolveAddress` | Registry | Resolve trusted address by identifier | `identifier`, `network?`, `category?` | `address`, `label`, `status`, `confidence`, `source_url` |
+| `mantle_validateAddress` | Registry | Validate format/checksum and optional code presence | `address`, `check_code?`, `network?` | `valid_format`, `is_checksummed`, `has_code`, `registry_match` |
+| `mantle_getBalance` | Account | Read native MNT balance | `address`, `network?` | `balance_wei`, `balance_mnt`, `block_number` |
+| `mantle_getTokenBalances` | Account | Batch ERC-20 balance reads | `address`, `tokens[]`, `network?` | `balances[]`, `partial`, per-token `error` |
+| `mantle_getAllowances` | Account | Batch ERC-20 allowance reads | `owner`, `pairs[]`, `network?` | `allowances[]`, `is_unlimited`, `spender_label`, `partial` |
+| `mantle_getTokenInfo` | Token | Read ERC-20 metadata and supply | `token`, `network?` | `name`, `symbol`, `decimals`, `total_supply_*` |
+| `mantle_getTokenPrices` | Token | Price/valuation interface with non-fabrication behavior | `tokens[]`, `base_currency?`, `network?` | `prices[]`, `partial`, warning when source unavailable |
+| `mantle_resolveToken` | Token | Resolve symbol and optionally enforce canonical token-list match | `symbol`, `network?`, `require_token_list_match?` | `address`, `token_list_checked`, `token_list_match`, `confidence` |
+| `mantle_getSwapQuote` | DeFi Read | Read DEX swap quote (Agni/Merchant Moe/best) | `token_in`, `token_out`, `amount_in`, `provider?` | `estimated_out_*`, `minimum_out_*`, `router_address`, `price_impact_pct` |
+| `mantle_getPoolLiquidity` | DeFi Read | Read pool reserves/liquidity metadata | `pool_address`, `provider?`, `network?` | `token_0/1`, `reserve_*`, `total_liquidity_usd`, `warnings` |
+| `mantle_getLendingMarkets` | DeFi Read | Read lending market metrics (Aave v3 scope) | `protocol?`, `asset?`, `network?` | `markets[]`, APY/TVL/LTV fields |
+| `mantle_querySubgraph` | Indexer | Execute GraphQL against approved endpoint | `endpoint`, `query`, `variables?`, `timeout_ms?` | `data`, `errors`, `elapsed_ms`, pagination warning |
+| `mantle_queryIndexerSql` | Indexer | Execute read-only SQL against approved endpoint | `endpoint`, `query`, `params?`, `timeout_ms?` | `columns`, `rows`, `row_count`, `truncated`, `warnings` |
+| `mantle_checkRpcHealth` | Diagnostics | Endpoint reachability and chain-id match check | `rpc_url?`, `network?` | `reachable`, `chain_id_matches`, `latency_ms`, `error` |
+| `mantle_probeEndpoint` | Diagnostics | Minimal JSON-RPC probe for diagnosis | `rpc_url`, `method?`, `params?` | `success`, `result`, `latency_ms` |
 
-### Account
-- `mantle_getBalance`
-- `mantle_getTokenBalances`
-- `mantle_getAllowances`
+## Safety and Contract Notes
 
-### Token
-- `mantle_getTokenInfo`
-- `mantle_getTokenPrices`
-- `mantle_resolveToken`
+- Indexer tools enforce endpoint policy (`https`, allowlist/domain checks, private-host blocking).
+- SQL interface blocks mutation statements (`insert`, `update`, `delete`, `drop`, etc.).
+- `mantle_getTokenPrices` never fabricates values; unknown valuations remain `null`.
+- Diagnostics probe method is restricted to:
+  - `eth_chainId`
+  - `eth_blockNumber`
+  - `eth_getBalance`
 
-### DeFi Read
-- `mantle_getSwapQuote`
-- `mantle_getPoolLiquidity`
-- `mantle_getLendingMarkets`
+## E2E Coverage Notes
 
-### Indexer
-- `mantle_querySubgraph`
-- `mantle_queryIndexerSql`
-
-### Diagnostics
-- `mantle_checkRpcHealth`
-- `mantle_probeEndpoint`
-
-## Total
-
-- **17 tools** represented in scenario coverage.
-
-## Scenario Mapping Notes
-
-- Indexer scenarios are optional at runtime through endpoint config variables.
-- DeFi quote/liquidity scenarios intentionally validate tool-error handling under stubbed dependency conditions.
-- Token resolution scenario for `mETH` in v0.2.5 uses `require_token_list_match=false` in E2E to reduce external list availability flakiness.
+- All 17 tools are represented in scenario registration.
+- Indexer scenarios are optional and activated by endpoint env vars (`E2E_SUBGRAPH_ENDPOINT`, `E2E_SQL_ENDPOINT`).
+- `mETH` resolution scenario uses `require_token_list_match=false` to reduce external token-list availability flakiness in CI-style runs.

@@ -1,6 +1,6 @@
 # Concepts Overview
 
-This section explains the high-level model behind Mantle MCP up to v0.2.5.
+This section explains the high-level model behind Mantle MCP up to v0.2.6.
 
 ## What Mantle MCP Is
 
@@ -24,7 +24,7 @@ Each tool has explicit input schema, stable output shape, and typed error semant
 
 ### 3. Agent Usability
 
-Descriptions, schemas, and prompts are written to maximize correct tool routing by LLMs. v0.2.5 specifically strengthens this with scenario-scoped tool exposure and tighter E2E assertions.
+Descriptions, schemas, and prompts are written to maximize correct tool routing by LLMs. The v0.2.5-v0.2.6 line strengthens this with scenario-scoped tool exposure and tighter E2E assertions.
 
 ## Key Conceptual Layers
 
@@ -32,3 +32,7 @@ Descriptions, schemas, and prompts are written to maximize correct tool routing 
 2. **Domain Tool Layer**: chain, token, account, DeFi read, indexer, diagnostics.
 3. **Policy Layer**: endpoint allowlists, input validation, read-only SQL restrictions.
 4. **Evaluation Layer**: unit tests plus E2E agent scenarios and release gate logic.
+
+## Recommended Next Read
+
+- [Skills and MCP Usage](/concepts/skills)

@@ -2,49 +2,144 @@
 
 MCP server for Mantle L2 with stdio transport and core read-only tools.
 
-## Implemented in v0.2
-
-- Server/transport:
-  - `src/index.ts`
-  - `src/server.ts`
-  - stdio-only runtime (`MANTLE_MCP_TRANSPORT=stdio`)
-- Core tools:
-  - `mantle_getChainInfo`
-  - `mantle_getChainStatus`
-  - `mantle_resolveAddress`
-  - `mantle_validateAddress`
-  - `mantle_getBalance`
-  - `mantle_getTokenBalances`
-  - `mantle_getAllowances`
-  - `mantle_getTokenInfo`
-  - `mantle_resolveToken`
-  - `mantle_getTokenPrices`
-- Core resources:
-  - `mantle://chain/mainnet`
-  - `mantle://chain/sepolia`
-  - `mantle://registry/contracts`
-  - `mantle://registry/tokens`
-  - `mantle://registry/protocols`
-
-## Install
+## Quick Start
 
 ```bash
 npm install
-```
-
-## Build
-
-```bash
 npm run build
-```
-
-## Run (stdio)
-
-```bash
 MANTLE_MCP_TRANSPORT=stdio npm start
 ```
 
-## Test
+## Implemented Surface
+
+Server and transport:
+- `src/index.ts`
+- `src/server.ts`
+- stdio runtime (`MANTLE_MCP_TRANSPORT=stdio`)
+
+MCP interfaces:
+- `listTools`
+- `callTool`
+- `listResources`
+- `readResource`
+- `listPrompts`
+- `getPrompt`
+
+Tools:
+- Chain: `mantle_getChainInfo`, `mantle_getChainStatus`
+- Registry: `mantle_resolveAddress`, `mantle_validateAddress`
+- Account: `mantle_getBalance`, `mantle_getTokenBalances`, `mantle_getAllowances`
+- Token: `mantle_getTokenInfo`, `mantle_getTokenPrices`, `mantle_resolveToken`
+- DeFi Read: `mantle_getSwapQuote`, `mantle_getPoolLiquidity`, `mantle_getLendingMarkets`
+- Indexer: `mantle_querySubgraph`, `mantle_queryIndexerSql`
+- Diagnostics: `mantle_checkRpcHealth`, `mantle_probeEndpoint`
+
+Resources:
+- `mantle://chain/mainnet`
+- `mantle://chain/sepolia`
+- `mantle://registry/contracts`
+- `mantle://registry/tokens`
+- `mantle://registry/protocols`
+- `mantle://docs/network-basics`
+- `mantle://docs/risk-checklist`
+
+Prompts:
+- `mantle_portfolioAudit`
+- `mantle_mantleBasics`
+- `mantle_gasConfiguration`
+
+## How To Use mantle-mcp
+
+Recommended operational flow for agents:
+
+1. Discover capabilities:
+   - `listTools`
+   - `listResources`
+   - `listPrompts`
+2. Load context before action:
+   - `readResource` for needed `mantle://...` URIs
+   - `getPrompt` for workflow templates
+3. Execute tool calls via `callTool` with schema-valid arguments.
+4. Use structured tool outputs as source-of-truth in final responses.
+
+Recommended call order for most workflows:
+
+1. `mantle_getChainInfo` / `mantle_getChainStatus`
+2. `mantle_resolveAddress` / `mantle_resolveToken`
+3. Domain tools (account, token, defi-read, indexer)
+4. Diagnostics (`mantle_checkRpcHealth`, `mantle_probeEndpoint`) when endpoint reliability is unclear
+
+## How To Use Skills (`skills/`)
+
+Each local skill is in `skills/<name>/SKILL.md` with references and agent config.
+
+Use them as workflow drivers:
+
+| Skill | Primary Use |
+| --- | --- |
+| `mantle-network-primer` | Mantle ecosystem and network onboarding |
+| `mantle-address-registry-navigator` | Canonical address lookup and validation |
+| `mantle-portfolio-analyst` | Wallet holdings and allowance exposure analysis |
+| `mantle-data-indexer` | Subgraph + SQL data extraction workflows |
+| `mantle-defi-operator` | DEX/lending read-oriented operation flows |
+| `mantle-readonly-debugger` | Debugging tool failures and RPC/read issues |
+| `mantle-risk-evaluator` | Risk scoring/checklist-driven decision support |
+| `mantle-tx-simulator` | Simulation-first transaction planning |
+| `mantle-smart-contract-deployer` | Deployment and verification checklists |
+
+Practical workflow:
+
+1. Choose a skill by task intent.
+2. Read the skill's `SKILL.md`.
+3. Follow the skill checklist.
+4. Execute with mantle-mcp tools/resources/prompts.
+
+## URL and Interface Quick Reference
+
+MCP interface purpose:
+
+| Interface | Purpose |
+| --- | --- |
+| `listTools` | discover callable tools and schemas |
+| `callTool` | execute one tool with structured args |
+| `listResources` | discover context URIs |
+| `readResource` | fetch concrete resource content |
+| `listPrompts` | discover prompt templates |
+| `getPrompt` | fetch prompt messages by name |
+
+External endpoint interfaces:
+
+| Variable/URL | Purpose |
+| --- | --- |
+| `MANTLE_RPC_URL` (`https://rpc.mantle.xyz`) | mainnet RPC override |
+| `MANTLE_SEPOLIA_RPC_URL` (`https://rpc.sepolia.mantle.xyz`) | sepolia RPC override |
+| `MANTLE_TOKEN_LIST_URL` (`https://token-list.mantle.xyz`) | canonical token list source |
+| `E2E_SUBGRAPH_ENDPOINT` | GraphQL endpoint for indexer E2E scenario |
+| `E2E_SQL_ENDPOINT` | SQL endpoint for indexer E2E scenario |
+| `https://openrouter.ai/api/v1` | OpenRouter base URL in E2E openrouter mode |
+
+Full interface mapping (including every resource URI and tool endpoint role):
+- `docs/pages/spec/interfaces.mdx`
+
+## Example MCP Client Config
+
+```json
+{
+  "mcpServers": {
+    "mantle": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "MANTLE_RPC_URL": "https://rpc.mantle.xyz",
+        "MANTLE_SEPOLIA_RPC_URL": "https://rpc.sepolia.mantle.xyz"
+      }
+    }
+  }
+}
+```
+
+## Verification Commands
 
 ```bash
 npm test -- --run
@@ -65,47 +160,20 @@ npm run test:e2e
 ```
 
 Notes:
-- `npm run test:e2e` does not auto-load `.env`; you need to export env vars before running.
+- `npm run test:e2e` does not auto-load `.env`; export env vars first.
 - OpenRouter mode uses provider-compatible settings in runner (no `stopWhen`).
 
 ## Documentation Site (Nextra)
 
-- Source: `docs/`
-- Local dev:
+Source: `docs/`
 
 ```bash
 npm run docs:dev
-```
-
-- Production build:
-
-```bash
 npm run docs:build
 ```
 
-- GitHub Pages URL (after deployment):
-  - `https://whisker17.github.io/mantle-agent-scaffold/`
-
-### GitHub Pages Deployment
-
+GitHub Pages:
+- Site URL: `https://whisker17.github.io/mantle-agent-scaffold/`
 - Workflow: `.github/workflows/docs-pages.yml`
-- Trigger: push to `main` that changes `docs/**` (or manual workflow dispatch)
+- Trigger: push to `main` on `docs/**` (or manual workflow dispatch)
 - Build output: static export from `docs/out`
-
-## Example MCP Client Config
-
-```json
-{
-  "mcpServers": {
-    "mantle": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["dist/index.js"],
-      "env": {
-        "MANTLE_RPC_URL": "https://rpc.mantle.xyz",
-        "MANTLE_SEPOLIA_RPC_URL": "https://rpc.sepolia.mantle.xyz"
-      }
-    }
-  }
-}
-```
