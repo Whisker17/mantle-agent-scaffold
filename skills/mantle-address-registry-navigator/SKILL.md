@@ -1,6 +1,6 @@
 ---
 name: mantle-address-registry-navigator
-description: Resolve trusted Mantle token and system contract addresses with a registry-first workflow. Use when any task needs a Mantle contract address, whitelist validation, anti-phishing checks, or safe address lookup before interacting on-chain.
+description: Use when any task needs a Mantle contract address, whitelist validation, anti-phishing checks, or safe address lookup before interacting on-chain.
 ---
 
 # Mantle Address Registry Navigator
@@ -11,19 +11,21 @@ Resolve addresses from trusted sources only and fail closed when data is missing
 
 ## Source Priority
 
-1. `get_contract_address` tool (if available in the runtime).
-2. Local registry file: `assets/registry.json`.
-3. If neither provides a verified match, stop and return a blocked result.
+1. `mantle_resolveToken` for token symbol/name requests.
+2. `mantle_resolveAddress` for contract key, alias, or label requests.
+3. Local registry file: `assets/registry.json` (fallback/manual cross-check only).
+4. If no source provides a verified match, stop and return a blocked result.
 
 ## Lookup Workflow
 
 1. Normalize the request:
-   - `environment` (`mainnet` or `testnet`)
+   - `network` (`mainnet` or `sepolia`; local registry fallback maps `sepolia` to `testnet`)
    - `identifier` (contract key, symbol, or alias)
-   - `category` (system, token, bridge, or protocol)
+   - `category` (system, token, bridge, `defi`, or `any`)
 2. Resolve candidates via source priority.
-3. Validate candidate fields:
-   - Address is EIP-55 checksummed and not the zero address.
+3. Validate the chosen candidate with `mantle_validateAddress` and registry metadata:
+   - `valid_format` is `true`.
+   - Address is not the zero address.
    - Entry environment matches request.
    - Entry status is usable (`active`) for execution.
    - Entry has provenance (`source.url` and `source.retrieved_at`).
@@ -35,6 +37,7 @@ Resolve addresses from trusted sources only and fail closed when data is missing
 - Never output guessed addresses.
 - Never treat user-supplied addresses as trusted without registry/tool verification.
 - Mark deprecated or paused contracts as non-executable.
+- Never return placeholder/template values from `assets/registry.json` (for example `REPLACE_WITH_EIP55_CHECKSUM_ADDRESS`).
 - If registry freshness is unknown, label confidence as `low` and request manual confirmation.
 
 ## Response Format
@@ -44,7 +47,7 @@ Return results in this structure:
 ```text
 Address Resolution Result
 - identifier:
-- environment:
+- network:
 - address:
 - category:
 - status:

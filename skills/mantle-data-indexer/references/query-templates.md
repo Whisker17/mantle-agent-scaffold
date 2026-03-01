@@ -2,6 +2,18 @@
 
 Use these templates as starting points. Replace placeholders explicitly.
 
+## Tool argument mapping (mantle-mcp v0.2)
+
+- GraphQL template -> `mantle_querySubgraph` (`querySubgraph`) with:
+  - `endpoint` (required)
+  - `query` (required)
+  - `variables` (optional)
+- SQL template -> `mantle_queryIndexerSql` (`queryIndexerSql`) with:
+  - `endpoint` (required)
+  - `query` (required, read-only SQL only)
+  - `params` (optional)
+- In E2E `endpoint-configured` scenarios, endpoint placeholders come from `E2E_SUBGRAPH_ENDPOINT` / `E2E_SQL_ENDPOINT`; if unset, those scenarios are skipped.
+
 ## GraphQL: wallet swap history (template)
 
 ```graphql
@@ -98,5 +110,7 @@ LIMIT :limit_n;
 
 - Always declare timestamp timezone as UTC in parameters and output.
 - Use deterministic ordering plus pagination for large result sets.
+- Keep SQL read-only; avoid INSERT/UPDATE/DELETE/DDL statements.
 - State whether amounts are raw token units or USD-normalized.
 - Include replaced parameter values in report appendix.
+- Carry forward tool warnings (`hasNextPage=true`, `truncated`) in the final report.

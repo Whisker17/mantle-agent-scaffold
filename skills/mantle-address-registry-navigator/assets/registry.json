@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "network": "mantle",
   "updated_at": "1970-01-01T00:00:00Z",
-  "notes": "Populate only from official and verifiable sources. Do not insert guessed addresses.",
+  "notes": "Template file: populate only from official and verifiable sources. Do not insert guessed addresses or return placeholder values.",
   "chain_ids": {
     "mainnet": null,
     "testnet": null
