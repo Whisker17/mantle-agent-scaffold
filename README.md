@@ -51,6 +51,23 @@ npm test -- --run
 npm run typecheck
 ```
 
+## E2E Agent Test
+
+```bash
+set -a
+source .env
+set +a
+
+# Optional: skip indexer endpoint scenarios when endpoint is not ready
+unset E2E_SUBGRAPH_ENDPOINT E2E_SQL_ENDPOINT
+
+npm run test:e2e
+```
+
+Notes:
+- `npm run test:e2e` does not auto-load `.env`; you need to export env vars before running.
+- OpenRouter mode uses provider-compatible settings in runner (no `stopWhen`).
+
 ## Example MCP Client Config
 
 ```json

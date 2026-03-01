@@ -1,6 +1,7 @@
 # Simulation Backends
 
 Choose backend by availability, fidelity, and reproducibility requirements.
+These backends are external to mantle-mcp v0.2 and must be run outside this server.
 
 ## Backend options
 
@@ -20,7 +21,7 @@ Choose backend by availability, fidelity, and reproducibility requirements.
 
 1. Use local fork when you need deterministic reproducibility or custom pre-state setup.
 2. Use managed simulator when you need speed, traces, and collaboration.
-3. If one backend fails, retry once on alternate backend before declaring inconclusive.
+3. If one backend fails, request one retry on an alternate backend before declaring inconclusive.
 
 ## Minimum captured fields
 

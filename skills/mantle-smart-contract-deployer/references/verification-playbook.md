@@ -1,6 +1,6 @@
 # Verification Playbook
 
-Use this workflow to verify deployed contracts on Mantle explorers.
+Use this workflow to plan or validate verification of externally deployed contracts on Mantle explorers.
 
 ## Required inputs
 
@@ -14,8 +14,8 @@ Use this workflow to verify deployed contracts on Mantle explorers.
 ## Steps
 
 1. Confirm deployed bytecode exists at target address.
-2. Submit verification payload to explorer API/UI.
-3. Poll verification status until success/failure/timeout.
+2. Prepare verification payload for explorer API/UI submission (or provide manual submission instructions when tooling is unavailable).
+3. Poll verification status from explorer responses until success/failure/timeout.
 4. Record verification link or identifier.
 
 ## Common failures and fixes
@@ -33,4 +33,5 @@ Use this workflow to verify deployed contracts on Mantle explorers.
 
 - Keep full request payload snapshot (excluding secrets).
 - Keep explorer response body and timestamp.
+- In mantle-mcp v0.2, do not claim the agent submitted deployment/verification transactions; execution happens externally.
 - Do not claim "verified" without explicit success response.

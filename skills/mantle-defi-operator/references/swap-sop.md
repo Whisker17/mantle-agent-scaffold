@@ -1,6 +1,6 @@
 # Swap SOP
 
-Use this standard flow for token swap execution on Mantle.
+Use this standard flow for token swap pre-execution analysis on Mantle.
 
 ## Step 1: Normalize input
 
@@ -25,16 +25,16 @@ Use this standard flow for token swap execution on Mantle.
 - Read current allowance for spender/router.
 - If insufficient:
   - prepare approval for minimum required amount
-  - optionally batch approve+swap when account supports safe batching
+  - note whether external executor can safely batch approve+swap
 
-## Step 5: Execute and monitor
+## Step 5: Build execution handoff plan
 
-- Submit swap transaction (or bundle).
-- Wait for receipt confirmation.
-- Capture gas usage and effective fee.
+- Build a deterministic call sequence (approve if needed, then swap).
+- Include router/spender, raw amounts, recipient, deadline, and slippage-bound minimum output.
+- State explicitly that execution must happen in an external signer/wallet flow.
 
-## Step 6: Settlement verification
+## Step 6: Post-execution verification plan
 
-- Re-read post-trade balances.
-- Compare actual output versus expected minimum.
-- Report slippage observed and anomalies.
+- Define which balances and allowances to re-read after user-confirmed execution.
+- Compare observed output versus expected minimum once execution evidence is provided.
+- Report slippage/anomalies as pending until post-execution data is available.

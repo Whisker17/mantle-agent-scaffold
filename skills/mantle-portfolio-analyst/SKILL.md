@@ -13,21 +13,27 @@ Build deterministic, read-only wallet analysis on Mantle. Enumerate balances and
 
 1. Confirm inputs:
    - `wallet_address`
-   - `environment` (`mainnet` or `testnet`)
+   - `network` (`mainnet` or `sepolia`)
    - optional token/spender scope
-2. Resolve environment RPC endpoint and chain ID.
-3. Fetch native balance (`eth_getBalance`) and convert from wei.
-4. Enumerate token balances using ERC-20 reads:
-   - `balanceOf(wallet)`
-   - `decimals()`
-   - `symbol()` or fallback label
-5. Enumerate allowances per token-spender pair with `allowance(owner, spender)`.
-6. Classify approval risk with `references/allowance-risk-rules.md`.
-7. Return formatted report with findings, confidence, and data timestamp.
+2. Validate requested wallet and chain context:
+   - `mantle_validateAddress`
+   - `mantle_getChainInfo`
+   - `mantle_getChainStatus`
+3. Determine analysis scope:
+   - token list from user input or `mantle://registry/tokens`
+   - spender list from user input or `mantle://registry/protocols`
+4. Fetch native balance with `mantle_getBalance`.
+5. Fetch ERC-20 balances with `mantle_getTokenBalances`.
+6. Fetch token-spender allowances with `mantle_getAllowances`.
+7. If a token's metadata is missing, use `mantle_getTokenInfo` for that token and keep missing fields as `unknown` when unresolved.
+8. Classify approval risk with `references/allowance-risk-rules.md`.
+9. Return a formatted report with findings, confidence, and explicit coverage/partial gaps.
 
 ## Guardrails
 
+- Use mantle-mcp v0.2 read-only tools only for this skill (`mantle_getBalance`, `mantle_getTokenBalances`, `mantle_getAllowances`, `mantle_getTokenInfo`, chain/address validation helpers).
 - Stay read-only; do not construct or send transactions.
+- Do not reference direct JSON-RPC calls (`eth_*`) as if they are callable tools in this workflow.
 - Do not guess token decimals or symbols if calls fail.
 - Validate checksummed addresses for wallet, token, and spender.
 - Mark missing token metadata as `unknown` and continue.
@@ -38,7 +44,7 @@ Build deterministic, read-only wallet analysis on Mantle. Enumerate balances and
 ```text
 Mantle Portfolio Report
 - wallet:
-- environment:
+- network:
 - chain_id:
 - collected_at_utc:
 

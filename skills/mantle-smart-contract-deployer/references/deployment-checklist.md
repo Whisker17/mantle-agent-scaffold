@@ -1,6 +1,6 @@
 # Deployment Checklist
 
-Run this checklist before sending a deployment transaction.
+Run this checklist before preparing an external deployment handoff.
 
 ## Environment checks
 
@@ -30,4 +30,4 @@ Run this checklist before sending a deployment transaction.
 ## Final gate
 
 - If any required check fails: stop deployment.
-- If all checks pass: proceed to transaction submission.
+- If all checks pass: produce an unsigned deployment handoff for an external signer/wallet.
