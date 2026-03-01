@@ -2,5 +2,6 @@
   "index": "Concepts Overview",
   "architecture": "Architecture Model",
   "testing": "Testing Philosophy",
-  "skills": "Skills and MCP Usage"
+  "skills": "Skills and MCP Usage",
+  "external-agents": "External Agent Integration"
 }
