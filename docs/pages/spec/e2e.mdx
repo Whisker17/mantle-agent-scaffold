@@ -1,0 +1,45 @@
+# E2E Test Spec
+
+## Objective
+
+Validate that a live LLM can select and call the right Mantle MCP tools from natural language prompts.
+
+## Core Flow
+
+1. Start MCP server.
+2. Create in-memory MCP client transport pair.
+3. Discover tools via `listTools`.
+4. Convert tool schemas to AI SDK tools.
+5. Execute scenario prompts with `generateText`.
+6. Assert expected tool calls, args, and outputs.
+7. Evaluate release gate policy.
+
+## v0.2.5 Runner Behavior
+
+- **Provider-aware stop condition**
+  - non-OpenRouter: use `stopWhen: stepCountIs(3)`
+  - OpenRouter: omit `stopWhen` for compatibility
+- **Scenario-scoped tools**
+  - runner exposes the scenario's expected tool by default to reduce wrong-tool routing
+- **Prompt directive injection**
+  - scenario prompt is wrapped with explicit instruction to call the expected tool
+- **Assertion source expansion**
+  - text assertions evaluate both model final answer and matched tool result payload
+
+## Failure Types
+
+- `TOOL_NOT_CALLED`: no tool call observed
+- `WRONG_ARGS`: wrong tool/arguments pattern
+- `ASSERTION_FAILED`: output text/content mismatch
+- `TIMEOUT`: request timeout
+- `LLM_ERROR`: provider/runtime failure
+
+## Release Gate (v0.2 line)
+
+Release gate checks:
+
+- pass-rate threshold
+- hard failure categories
+- scenario-level summary reporting
+
+In current policy, `TOOL_NOT_CALLED`, `TIMEOUT`, and `LLM_ERROR` are treated as hard release failures.

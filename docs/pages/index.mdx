@@ -1,0 +1,30 @@
+# Mantle MCP Documentation
+
+Welcome to the documentation site for **mantle-agent-scaffold**, covering implementation status up to **v0.2.5**.
+
+This site is intentionally split into two tracks:
+
+- **Concepts**: why the system is designed this way and how to reason about it.
+- **Technical Spec**: implementation-level behavior, interfaces, and constraints.
+
+## Version Scope
+
+This documentation reflects:
+
+- Core MCP server capabilities in `src/`
+- v0.2 E2E test architecture and scenario design in `e2e/`
+- Release hardening and compatibility updates included in **v0.2.5**
+
+## Where To Start
+
+If you are new to the project, start with:
+
+1. [Concepts](/concepts)
+2. [Technical Spec](/spec)
+
+## Current Status Snapshot (v0.2.5)
+
+- 17 MCP tools are implemented across chain, registry, account, token, DeFi read, indexer, and diagnostics domains.
+- E2E suite runs against live LLMs with scenario-based assertions and release gate evaluation.
+- OpenRouter compatibility is handled explicitly in the E2E runner.
+- Documentation and implementation are aligned for the v0.2.5 release line.

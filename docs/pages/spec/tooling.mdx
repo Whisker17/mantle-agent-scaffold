@@ -1,0 +1,44 @@
+# Tool Surface (v0.2.5)
+
+## Tool Modules
+
+### Chain
+- `mantle_getChainInfo`
+- `mantle_getChainStatus`
+
+### Registry
+- `mantle_resolveAddress`
+- `mantle_validateAddress`
+
+### Account
+- `mantle_getBalance`
+- `mantle_getTokenBalances`
+- `mantle_getAllowances`
+
+### Token
+- `mantle_getTokenInfo`
+- `mantle_getTokenPrices`
+- `mantle_resolveToken`
+
+### DeFi Read
+- `mantle_getSwapQuote`
+- `mantle_getPoolLiquidity`
+- `mantle_getLendingMarkets`
+
+### Indexer
+- `mantle_querySubgraph`
+- `mantle_queryIndexerSql`
+
+### Diagnostics
+- `mantle_checkRpcHealth`
+- `mantle_probeEndpoint`
+
+## Total
+
+- **17 tools** represented in scenario coverage.
+
+## Scenario Mapping Notes
+
+- Indexer scenarios are optional at runtime through endpoint config variables.
+- DeFi quote/liquidity scenarios intentionally validate tool-error handling under stubbed dependency conditions.
+- Token resolution scenario for `mETH` in v0.2.5 uses `require_token_list_match=false` in E2E to reduce external list availability flakiness.
