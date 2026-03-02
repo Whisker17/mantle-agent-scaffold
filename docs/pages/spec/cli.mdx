@@ -1,0 +1,109 @@
+# CLI Reference (v0.2.7)
+
+`mantle-cli` is the user-facing command-line wrapper over the MCP tool handlers.
+
+## Install and Run
+
+Inside this repository:
+
+```bash
+npm install
+npm run build
+node dist/src/cli/index.js --help
+```
+
+From an installed package:
+
+```bash
+mantle-cli --help
+```
+
+## Global Options
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `-n, --network <network>` | Target network (`mainnet`, `sepolia`) | `mainnet` |
+| `--json` | Emit raw JSON payloads | `false` |
+| `--no-color` | Disable ANSI color output | `false` |
+| `--rpc-url <url>` | Override RPC endpoint for the selected network | unset |
+| `-V, --version` | Print CLI version | n/a |
+| `-h, --help` | Print help | n/a |
+
+## Command Groups
+
+### `chain`
+
+- `mantle-cli chain info`
+- `mantle-cli chain status`
+
+### `registry`
+
+- `mantle-cli registry resolve <identifier> [--category <category>]`
+- `mantle-cli registry validate <address> [--check-code]`
+
+### `account`
+
+- `mantle-cli account balance <address>`
+- `mantle-cli account token-balances <address> --tokens <csv>`
+- `mantle-cli account allowances <owner> --pairs <token:spender,...>`
+
+### `token`
+
+- `mantle-cli token info <token>`
+- `mantle-cli token prices --tokens <csv> [--base-currency usd|mnt]`
+- `mantle-cli token resolve <symbol> [--no-token-list-check]`
+
+### `defi`
+
+- `mantle-cli defi swap-quote --in <token> --out <token> --amount <amount> [--provider ...] [--fee-tier <number>]`
+- `mantle-cli defi pool-liquidity <pool-address> [--provider ...]`
+- `mantle-cli defi pool-opportunities --token-a <token> --token-b <token> [--provider ...] [--max-results <n>]`
+- `mantle-cli defi tvl [--protocol ...]`
+- `mantle-cli defi lending-markets [--protocol ...] [--asset <asset>]`
+
+### `indexer`
+
+- `mantle-cli indexer subgraph --endpoint <url> --query <graphql> [--variables <json>] [--timeout <ms>]`
+- `mantle-cli indexer sql --endpoint <url> --query <sql> [--params <json>] [--timeout <ms>]`
+
+### `diagnostics`
+
+- `mantle-cli diagnostics rpc-health [--rpc-url <url>]`
+- `mantle-cli diagnostics probe --rpc-url <url> [--method ...] [--params <json-array>]`
+
+## Output and Exit Codes
+
+- Human-readable output is table/key-value formatted by default.
+- `--json` returns machine-readable JSON payloads.
+- Exit code `0`: command succeeded.
+- Exit code `1`: typed `MantleMcpError` (for example validation, endpoint policy, unsupported inputs).
+- Exit code `2`: unexpected internal error.
+
+## Input Validation Notes
+
+CLI numeric options are strict:
+
+- `--timeout` must be an integer.
+- `--max-results` must be an integer.
+- `--fee-tier` must be a finite number.
+
+Invalid values are rejected by argument parsing before tool execution.
+
+## Examples
+
+```bash
+# Chain info as JSON
+mantle-cli chain info --json
+
+# Sepolia status with custom RPC
+mantle-cli -n sepolia --rpc-url https://rpc.sepolia.mantle.xyz chain status
+
+# Token prices
+mantle-cli token prices --tokens USDC,WMNT --base-currency usd
+
+# Disable colors for logs/pipelines
+mantle-cli --no-color chain info
+
+# Check RPC endpoint health
+mantle-cli diagnostics rpc-health --rpc-url https://rpc.mantle.xyz --json
+```
