@@ -40,5 +40,31 @@ export const defiReadScenarios: AgentScenario[] = [
       toolArgsMatchAny: [{ protocol: "aave_v3" }, { asset: "USDC" }],
       containsAnyText: ["market", "aave", "empty"]
     }
+  },
+  {
+    id: "defi-getProtocolTvl-agni",
+    module: "defi-read",
+    toolName: "mantle_getProtocolTvl",
+    prompt: "Get the latest TVL for Agni on Mantle.",
+    expectedToolCall: "mantle_getProtocolTvl",
+    expectedOutcome: "success",
+    outputAssertions: {
+      requiredArgs: [],
+      toolArgsMatchAny: [{ protocol: "agni" }, { protocol: "all" }],
+      containsAnyText: ["tvl", "agni", "source_trace"]
+    }
+  },
+  {
+    id: "defi-getPoolOpportunities-mnt-meth",
+    module: "defi-read",
+    toolName: "mantle_getPoolOpportunities",
+    prompt: "I have MNT and mETH. Find candidate pools on Mantle and rank them.",
+    expectedToolCall: "mantle_getPoolOpportunities",
+    expectedOutcome: "success",
+    outputAssertions: {
+      requiredArgs: ["token_a", "token_b"],
+      toolArgsMatchAny: [{ token_a: "MNT", token_b: "mETH" }, { token_a: "WMNT", token_b: "mETH" }],
+      containsAnyText: ["candidate", "pool", "mETH", "MNT"]
+    }
   }
 ];

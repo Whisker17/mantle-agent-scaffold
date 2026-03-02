@@ -10,7 +10,7 @@ import { allScenarios } from "./scenarios/index.js";
 describe("mantle-mcp agent e2e", () => {
   it("registers all v0.2 scenarios", () => {
     const reporter = createScenarioReporter();
-    expect(allScenarios).toHaveLength(17);
+    expect(allScenarios).toHaveLength(19);
     expect(reporter.summary().total).toBe(0);
   });
 

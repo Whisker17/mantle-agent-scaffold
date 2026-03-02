@@ -63,6 +63,11 @@ For end-to-end workflow expectations in non-local runtimes, see [External Agent 
 | `E2E_SUBGRAPH_ENDPOINT` | `https://.../graphql` | Endpoint used by indexer GraphQL E2E scenario |
 | `E2E_SQL_ENDPOINT` | `https://.../sql` | Endpoint used by indexer SQL E2E scenario |
 | OpenRouter base URL | `https://openrouter.ai/api/v1` | Used when `E2E_LLM_PROVIDER=openrouter` |
+| DexScreener API | `https://api.dexscreener.com` | Default DeFi read source for swap route and pool/liquidity snapshots |
+| DefiLlama price API | `https://coins.llama.fi/prices/current` | Fallback token valuation source for DeFi pool USD derivation |
+| Mantle RPC (Aave reads) | `https://rpc.mantle.xyz` | Primary source for on-chain Aave lending market metrics |
+| Subgraph/Indexer adapters | project-specific endpoint/query binding | Secondary fallback layer for DeFi pool/market reads |
+| Internet/manual lookup | n/a | Last-resort human verification path (not auto-fabricated) |
 
 ## Tool-Level Endpoint Interfaces
 
@@ -72,6 +77,25 @@ For end-to-end workflow expectations in non-local runtimes, see [External Agent 
 | `mantle_queryIndexerSql` | `endpoint` (SQL API URL) | Execute read-only SQL only; mutation keywords are blocked |
 | `mantle_checkRpcHealth` | optional `rpc_url` | Verify endpoint reachability + chain-id match for target network |
 | `mantle_probeEndpoint` | required `rpc_url`, optional `method` | Low-level probe for endpoint diagnosis |
+
+## DeFi Read Output Interfaces
+
+All DeFi read tools (`mantle_getSwapQuote`, `mantle_getPoolLiquidity`, `mantle_getPoolOpportunities`, `mantle_getProtocolTvl`, `mantle_getLendingMarkets`) expose:
+
+- `intent`: normalized query intent (`pool_quote`, `pool_liquidity`, `protocol_lending_markets`)
+- `source_trace[]`: source attempt records with:
+  - `source`
+  - `tier`
+  - `status` (`success` | `empty` | `error` | `skipped`)
+  - optional `reason`
+- `confidence`:
+  - `score`
+  - `freshness`
+  - `coverage`
+  - `source_count`
+  - `conflict_penalty`
+
+`mantle_getPoolLiquidity` additionally emits `total_liquidity_usd_range` when multi-source USD valuations conflict above threshold.
 
 ## Allowed Probe Methods (`mantle_probeEndpoint`)
 

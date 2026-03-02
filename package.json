@@ -1,6 +1,6 @@
 {
   "name": "mantle-mcp",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "MCP server for AI-driven Mantle L2 development - chain reads, simulation, and unsigned transaction building",
   "type": "module",
   "main": "dist/index.js",

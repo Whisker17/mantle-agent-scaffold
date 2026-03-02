@@ -1,4 +1,4 @@
-# mantle-mcp (v0.2.6)
+# mantle-mcp (v0.2.7)
 
 MCP server for Mantle L2 with stdio transport and core read-only tools.
 
@@ -30,9 +30,39 @@ Tools:
 - Registry: `mantle_resolveAddress`, `mantle_validateAddress`
 - Account: `mantle_getBalance`, `mantle_getTokenBalances`, `mantle_getAllowances`
 - Token: `mantle_getTokenInfo`, `mantle_getTokenPrices`, `mantle_resolveToken`
-- DeFi Read: `mantle_getSwapQuote`, `mantle_getPoolLiquidity`, `mantle_getLendingMarkets`
+- DeFi Read: `mantle_getSwapQuote`, `mantle_getPoolLiquidity`, `mantle_getPoolOpportunities`, `mantle_getProtocolTvl`, `mantle_getLendingMarkets`
 - Indexer: `mantle_querySubgraph`, `mantle_queryIndexerSql`
 - Diagnostics: `mantle_checkRpcHealth`, `mantle_probeEndpoint`
+
+## DeFi Data Source Strategy
+
+`mantle-mcp` now uses **intent-routed layered reads** instead of one fixed fallback chain.
+
+Intent routes (v0.2.7):
+
+- `pool_quote` (`mantle_getSwapQuote`): `dexscreener(provider route)` -> `peer provider in best mode` -> `internet (manual only)`.
+- `pool_liquidity` (`mantle_getPoolLiquidity`): `dexscreener pair` -> `subgraph` -> `indexer sql`; valuation path is `dexscreener token prices` -> `defillama prices`.
+- `pool_opportunity_scan` (`mantle_getPoolOpportunities`): `dexscreener token-pairs` for candidate pool discovery and ranking.
+- `protocol_tvl` (`mantle_getProtocolTvl`): `defillama protocol tvl` -> `subgraph` -> `indexer sql` -> `internet (manual only)`.
+- `protocol_lending_markets` (`mantle_getLendingMarkets`): `onchain aave` -> `subgraph` -> `indexer sql` -> `internet (manual only)`.
+
+Fallback trigger policy:
+
+- Fallback activates only when upstream result is empty, errored, or misses required fields.
+- Successful source data is not silently overwritten by lower-priority sources.
+
+Conflict and confidence policy:
+
+- If two valid liquidity USD values differ by >20%, tool returns `total_liquidity_usd_range` and adds a conflict warning.
+- DeFi read outputs include:
+  - `intent`
+  - `source_trace[]` (`source`, `tier`, `status`, `reason?`)
+  - `confidence` (`score`, `freshness`, `coverage`, `source_count`, `conflict_penalty`)
+
+Safety behavior:
+
+- Unknown valuation remains `null` (never silently converted to `0`).
+- If no swap route data is available, tool returns typed `NO_ROUTE` error.
 
 Resources:
 - `mantle://chain/mainnet`
