@@ -26,6 +26,9 @@ interface TokenDeps {
   fetchTokenListSnapshot: () => Promise<TokenListSnapshot>;
 }
 
+const DEXSCREENER_API_BASE = "https://api.dexscreener.com";
+const DEFILLAMA_PRICES_API_BASE = "https://coins.llama.fi/prices/current";
+
 const defaultDeps: TokenDeps = {
   getClient: getPublicClient,
   now: () => new Date().toISOString(),
@@ -63,6 +66,96 @@ function withDeps(overrides?: Partial<TokenDeps>): TokenDeps {
     ...defaultDeps,
     ...overrides
   };
+}
+
+function resolveDexScreenerChain(network: "mainnet" | "sepolia"): string | null {
+  if (network === "mainnet") {
+    return "mantle";
+  }
+  return null;
+}
+
+function resolveDefiLlamaChain(network: "mainnet" | "sepolia"): string | null {
+  if (network === "mainnet") {
+    return "mantle";
+  }
+  return null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+async function fetchJsonSafe(url: string, timeoutMs = 8000): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchDexScreenerTokenPriceUsd(
+  network: "mainnet" | "sepolia",
+  tokenAddress: string
+): Promise<number | null> {
+  const chainId = resolveDexScreenerChain(network);
+  if (!chainId) {
+    return null;
+  }
+
+  const payload = await fetchJsonSafe(
+    `${DEXSCREENER_API_BASE}/tokens/v1/${chainId}/${tokenAddress}`
+  );
+  if (!Array.isArray(payload) || payload.length === 0) {
+    return null;
+  }
+
+  const first = payload[0] as { priceUsd?: number | string };
+  return asFiniteNumber(first?.priceUsd);
+}
+
+async function fetchDefiLlamaTokenPrices(
+  network: "mainnet" | "sepolia",
+  tokenAddresses: string[]
+): Promise<Record<string, number | null>> {
+  const chainId = resolveDefiLlamaChain(network);
+  if (!chainId || tokenAddresses.length === 0) {
+    return {};
+  }
+
+  const unique = [...new Set(tokenAddresses.map((address) => address.toLowerCase()))];
+  const coins = unique.map((address) => `${chainId}:${address}`).join(",");
+  const payload = await fetchJsonSafe(`${DEFILLAMA_PRICES_API_BASE}/${coins}`);
+  const record =
+    payload && typeof payload === "object" && payload.coins && typeof payload.coins === "object"
+      ? (payload.coins as Record<string, { price?: number | string }>)
+      : {};
+
+  const out: Record<string, number | null> = {};
+  for (const address of unique) {
+    const key = `${chainId}:${address}`;
+    out[address] = asFiniteNumber(record[key]?.price);
+  }
+  return out;
 }
 
 function findTokenInCanonical(
@@ -118,7 +211,11 @@ export async function getTokenInfo(
   };
 }
 
-export async function getTokenPrices(args: Record<string, unknown>): Promise<any> {
+export async function getTokenPrices(
+  args: Record<string, unknown>,
+  deps?: Partial<TokenDeps>
+): Promise<any> {
+  const resolvedDeps = withDeps(deps);
   const { network } = normalizeNetwork(args);
   const baseCurrency =
     typeof args.base_currency === "string" && args.base_currency.toLowerCase() === "mnt"
@@ -134,23 +231,164 @@ export async function getTokenPrices(args: Record<string, unknown>): Promise<any
     );
   }
 
-  const prices = tokens.map((input) => ({
-    input,
-    symbol: null,
-    address: null,
-    price: null,
-    source: "none" as const,
-    confidence: "low" as const,
-    quoted_at_utc: null,
-    warnings: ["No trusted valuation backend configured for this token."]
-  }));
+  const resolvedInputs = await Promise.all(
+    tokens.map(async (input) => {
+      try {
+        const token = await resolvedDeps.resolveTokenInput(input, network);
+        if (token.address === "native") {
+          const wrapped = await resolvedDeps.resolveTokenInput("WMNT", network);
+          return {
+            input,
+            resolved: token,
+            pricingAddress: wrapped.address.toLowerCase(),
+            parseError: null as string | null
+          };
+        }
+
+        return {
+          input,
+          resolved: token,
+          pricingAddress: token.address.toLowerCase(),
+          parseError: null as string | null
+        };
+      } catch (error) {
+        return {
+          input,
+          resolved: null as ResolvedTokenInput | null,
+          pricingAddress: null as string | null,
+          parseError: error instanceof Error ? error.message : String(error)
+        };
+      }
+    })
+  );
+
+  const addressesToQuote = new Set<string>();
+  for (const item of resolvedInputs) {
+    if (item.pricingAddress) {
+      addressesToQuote.add(item.pricingAddress);
+    }
+  }
+
+  let mntPricingAddress: string | null = null;
+  if (baseCurrency === "mnt") {
+    try {
+      const wrapped = await resolvedDeps.resolveTokenInput("WMNT", network);
+      mntPricingAddress = wrapped.address.toLowerCase();
+      addressesToQuote.add(mntPricingAddress);
+    } catch {
+      mntPricingAddress = null;
+    }
+  }
+
+  const quotedAddresses = [...addressesToQuote];
+  const usdByAddress: Record<string, number | null> = {};
+  const sourceByAddress: Record<string, "dexscreener" | "defillama" | "none"> = {};
+
+  const dexPrices = await Promise.all(
+    quotedAddresses.map((address) => fetchDexScreenerTokenPriceUsd(network, address))
+  );
+  const missing: string[] = [];
+  for (let i = 0; i < quotedAddresses.length; i += 1) {
+    const address = quotedAddresses[i];
+    const price = dexPrices[i];
+    if (typeof price === "number") {
+      usdByAddress[address] = price;
+      sourceByAddress[address] = "dexscreener";
+    } else {
+      missing.push(address);
+    }
+  }
+
+  if (missing.length > 0) {
+    const fallback = await fetchDefiLlamaTokenPrices(network, missing);
+    for (const address of missing) {
+      const price = fallback[address] ?? null;
+      usdByAddress[address] = price;
+      sourceByAddress[address] = typeof price === "number" ? "defillama" : "none";
+    }
+  }
+
+  const mntUsd =
+    mntPricingAddress != null
+      ? (usdByAddress[mntPricingAddress] ?? null)
+      : null;
+
+  const quotedAt = resolvedDeps.now();
+  const prices = resolvedInputs.map((entry) => {
+    if (!entry.resolved) {
+      return {
+        input: entry.input,
+        symbol: null,
+        address: null,
+        price: null,
+        source: "none" as const,
+        confidence: "low" as const,
+        quoted_at_utc: quotedAt,
+        warnings: [entry.parseError ?? "Token could not be resolved."]
+      };
+    }
+
+    const symbol = entry.resolved.symbol;
+    const address = entry.resolved.address;
+    const usdPrice = entry.pricingAddress ? (usdByAddress[entry.pricingAddress] ?? null) : null;
+    const source = entry.pricingAddress ? sourceByAddress[entry.pricingAddress] ?? "none" : "none";
+
+    if (baseCurrency === "mnt") {
+      if (address === "native" || symbol?.toLowerCase() === "mnt" || symbol?.toLowerCase() === "wmnt") {
+        return {
+          input: entry.input,
+          symbol,
+          address,
+          price: 1,
+          source: "derived" as const,
+          confidence: "high" as const,
+          quoted_at_utc: quotedAt,
+          warnings: []
+        };
+      }
+      if (usdPrice == null || mntUsd == null || mntUsd <= 0) {
+        return {
+          input: entry.input,
+          symbol,
+          address,
+          price: null,
+          source,
+          confidence: "low" as const,
+          quoted_at_utc: quotedAt,
+          warnings: ["MNT quote currency conversion unavailable."]
+        };
+      }
+      return {
+        input: entry.input,
+        symbol,
+        address,
+        price: usdPrice / mntUsd,
+        source,
+        confidence: source === "dexscreener" ? "high" as const : "medium" as const,
+        quoted_at_utc: quotedAt,
+        warnings: []
+      };
+    }
+
+    return {
+      input: entry.input,
+      symbol,
+      address,
+      price: usdPrice,
+      source,
+      confidence:
+        usdPrice == null ? ("low" as const) : source === "dexscreener" ? ("high" as const) : ("medium" as const),
+      quoted_at_utc: quotedAt,
+      warnings: usdPrice == null ? ["No trusted valuation backend returned this token price."] : []
+    };
+  });
 
   return {
     base_currency: baseCurrency,
     prices,
     partial: prices.some((entry) => entry.price === null),
     warnings:
-      prices.length > 0
+      prices.some((entry) => entry.price === null)
         ? ["Prices are null when a trusted source is unavailable. Values are never fabricated."]
         : [],
     network

@@ -1,6 +1,6 @@
-# Tool Surface (v0.2.6)
+# Tool Surface (v0.2.7)
 
-`mantle-mcp` currently exposes **17 tools** across 7 domains.
+`mantle-mcp` currently exposes **19 tools** across 7 domains.
 
 ## Tool Contracts
 
@@ -16,13 +16,40 @@
 | `mantle_getTokenInfo` | Token | Read ERC-20 metadata and supply | `token`, `network?` | `name`, `symbol`, `decimals`, `total_supply_*` |
 | `mantle_getTokenPrices` | Token | Price/valuation interface with non-fabrication behavior | `tokens[]`, `base_currency?`, `network?` | `prices[]`, `partial`, warning when source unavailable |
 | `mantle_resolveToken` | Token | Resolve symbol and optionally enforce canonical token-list match | `symbol`, `network?`, `require_token_list_match?` | `address`, `token_list_checked`, `token_list_match`, `confidence` |
-| `mantle_getSwapQuote` | DeFi Read | Read DEX swap quote (Agni/Merchant Moe/best) | `token_in`, `token_out`, `amount_in`, `provider?` | `estimated_out_*`, `minimum_out_*`, `router_address`, `price_impact_pct` |
-| `mantle_getPoolLiquidity` | DeFi Read | Read pool reserves/liquidity metadata | `pool_address`, `provider?`, `network?` | `token_0/1`, `reserve_*`, `total_liquidity_usd`, `warnings` |
-| `mantle_getLendingMarkets` | DeFi Read | Read lending market metrics (Aave v3 scope) | `protocol?`, `asset?`, `network?` | `markets[]`, APY/TVL/LTV fields |
+| `mantle_getSwapQuote` | DeFi Read | Read DEX swap quote (Agni/Merchant Moe/best) | `token_in`, `token_out`, `amount_in`, `provider?` | `estimated_out_*`, `minimum_out_*`, `router_address`, `price_impact_pct`, `intent`, `source_trace[]`, `confidence` |
+| `mantle_getPoolLiquidity` | DeFi Read | Read pool reserves/liquidity metadata | `pool_address`, `provider?`, `network?` | `token_0/1`, `reserve_*`, `total_liquidity_usd`, `total_liquidity_usd_range?`, `intent`, `source_trace[]`, `confidence`, `warnings` |
+| `mantle_getPoolOpportunities` | DeFi Read | Scan and rank candidate pools for a token pair | `token_a`, `token_b`, `provider?`, `max_results?`, `network?` | `candidates[]`, `intent`, `source_trace[]`, `confidence` |
+| `mantle_getProtocolTvl` | DeFi Read | Read protocol-level TVL for Agni/Merchant Moe using layered sources | `protocol?`, `network?` | `tvl_usd`, `breakdown[]`, `intent`, `source_trace[]`, `confidence`, `warnings` |
+| `mantle_getLendingMarkets` | DeFi Read | Read lending market metrics (Aave v3 scope) | `protocol?`, `asset?`, `network?` | `markets[]`, APY/TVL/LTV fields, `intent`, `source_trace[]`, `confidence` |
 | `mantle_querySubgraph` | Indexer | Execute GraphQL against approved endpoint | `endpoint`, `query`, `variables?`, `timeout_ms?` | `data`, `errors`, `elapsed_ms`, pagination warning |
 | `mantle_queryIndexerSql` | Indexer | Execute read-only SQL against approved endpoint | `endpoint`, `query`, `params?`, `timeout_ms?` | `columns`, `rows`, `row_count`, `truncated`, `warnings` |
 | `mantle_checkRpcHealth` | Diagnostics | Endpoint reachability and chain-id match check | `rpc_url?`, `network?` | `reachable`, `chain_id_matches`, `latency_ms`, `error` |
 | `mantle_probeEndpoint` | Diagnostics | Minimal JSON-RPC probe for diagnosis | `rpc_url`, `method?`, `params?` | `success`, `result`, `latency_ms` |
+
+## DeFi Read Source Policy
+
+Intent routing (v0.2.7):
+
+- `pool_quote` (`mantle_getSwapQuote`): DexScreener provider route first; in `best` mode both providers are queried and ranked.
+- `pool_liquidity` (`mantle_getPoolLiquidity`): DexScreener pair first, then subgraph fallback, then indexer SQL fallback.
+- `pool_opportunity_scan` (`mantle_getPoolOpportunities`): DexScreener token-pairs endpoint for candidate pool discovery and ranking.
+- `protocol_tvl` (`mantle_getProtocolTvl`): DefiLlama protocol TVL first, then subgraph fallback, then indexer SQL fallback.
+- `protocol_lending_markets` (`mantle_getLendingMarkets`): on-chain Aave first, then subgraph/indexer fallbacks.
+
+Fallback trigger policy:
+
+- A lower tier is used only when upper tier is empty, errored, or missing required fields.
+- Successful higher-tier data is preserved.
+
+Valuation policy:
+
+- Pool USD valuation path is DexScreener token prices first, DefiLlama as fallback.
+- Null semantics: unavailable valuation stays `null` instead of `0`.
+
+Conflict and confidence policy:
+
+- Liquidity USD conflict threshold is 20%; above threshold, tool emits `total_liquidity_usd_range`.
+- DeFi read outputs emit `source_trace[]` and a normalized `confidence` score bundle.
 
 ## Safety and Contract Notes
 
@@ -36,6 +63,6 @@
 
 ## E2E Coverage Notes
 
-- All 17 tools are represented in scenario registration.
+- All 19 tools are represented in scenario registration.
 - Indexer scenarios are optional and activated by endpoint env vars (`E2E_SUBGRAPH_ENDPOINT`, `E2E_SQL_ENDPOINT`).
 - `mETH` resolution scenario uses `require_token_list_match=false` to reduce external token-list availability flakiness in CI-style runs.
