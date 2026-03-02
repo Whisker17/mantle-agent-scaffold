@@ -1,5 +1,6 @@
 {
   "index": "Spec Overview",
+  "cli": "CLI Reference (v0.2.7)",
   "server": "Server and Runtime",
   "interfaces": "URLs and Interfaces",
   "e2e": "E2E Test Spec",
