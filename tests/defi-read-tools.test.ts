@@ -235,4 +235,19 @@ describe("defi read tools", () => {
     expect(result.markets[0].protocol).toBe("aave_v3");
     expect(result.markets[0].tvl_usd).toBeNull();
   });
+
+  it("throws typed error when aave market data is unavailable", async () => {
+    await expect(
+      getLendingMarkets(
+        {
+          protocol: "aave_v3",
+          network: "mainnet"
+        },
+        {
+          marketProvider: async () => [],
+          now: () => "2026-02-28T00:00:00.000Z"
+        }
+      )
+    ).rejects.toMatchObject({ code: "LENDING_DATA_UNAVAILABLE" });
+  });
 });

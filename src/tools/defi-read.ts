@@ -1,6 +1,7 @@
 import { formatUnits, getAddress, isAddress, parseUnits } from "viem";
 import { MANTLE_PROTOCOLS } from "../config/protocols.js";
 import { MantleMcpError } from "../errors.js";
+import { getPublicClient } from "../lib/clients.js";
 import { normalizeNetwork } from "../lib/network.js";
 import { resolveTokenInput as resolveTokenInputFromRegistry } from "../lib/token-registry.js";
 import type { ResolvedTokenInput } from "../lib/token-registry.js";
@@ -52,18 +53,20 @@ interface LendingMarketsDeps {
   marketProvider: (params: {
     protocol: "aave_v3";
     network: "mainnet" | "sepolia";
-  }) => Promise<Array<{
-    protocol: string;
-    asset: string;
-    asset_address: string;
-    supply_apy: number;
-    borrow_apy_variable: number;
-    borrow_apy_stable: number | null;
-    tvl_usd: number | null;
-    ltv: number | null;
-    liquidation_threshold: number | null;
-  }>>;
+  }) => Promise<LendingMarket[]>;
   now: () => string;
+}
+
+interface LendingMarket {
+  protocol: string;
+  asset: string;
+  asset_address: string;
+  supply_apy: number;
+  borrow_apy_variable: number;
+  borrow_apy_stable: number | null;
+  tvl_usd: number | null;
+  ltv: number | null;
+  liquidation_threshold: number | null;
 }
 
 const defaultSwapDeps: SwapQuoteDeps = {
@@ -78,8 +81,281 @@ const defaultPoolDeps: PoolLiquidityDeps = {
   now: () => new Date().toISOString()
 };
 
+const AAVE_PROTOCOL_DATA_PROVIDER_ABI = [
+  {
+    type: "function",
+    name: "getAllReservesTokens",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        type: "tuple[]",
+        components: [
+          { name: "symbol", type: "string" },
+          { name: "tokenAddress", type: "address" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
+    name: "getReserveData",
+    stateMutability: "view",
+    inputs: [{ name: "asset", type: "address" }],
+    outputs: [
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint40" }
+    ]
+  },
+  {
+    type: "function",
+    name: "getReserveConfigurationData",
+    stateMutability: "view",
+    inputs: [{ name: "asset", type: "address" }],
+    outputs: [
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "bool" },
+      { type: "bool" },
+      { type: "bool" },
+      { type: "bool" },
+      { type: "bool" }
+    ]
+  }
+] as const;
+
+const AAVE_POOL_ADDRESSES_PROVIDER_ABI = [
+  {
+    type: "function",
+    name: "getPriceOracle",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }]
+  }
+] as const;
+
+const AAVE_ORACLE_ABI = [
+  {
+    type: "function",
+    name: "BASE_CURRENCY",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }]
+  },
+  {
+    type: "function",
+    name: "BASE_CURRENCY_UNIT",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "getAssetPrice",
+    stateMutability: "view",
+    inputs: [{ name: "asset", type: "address" }],
+    outputs: [{ type: "uint256" }]
+  }
+] as const;
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const RAY = 10n ** 27n;
+
+function rayToPercent(value: bigint): number {
+  return Number((value * 10000n) / RAY) / 100;
+}
+
+function bpsToPercent(value: bigint): number {
+  return Number(value) / 100;
+}
+
+function asBigInt(value: unknown): bigint {
+  if (typeof value === "bigint") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return BigInt(value);
+  }
+  return BigInt(String(value));
+}
+
+function toUsdValue(
+  supplyRaw: bigint,
+  decimals: number,
+  assetPriceInBase: bigint,
+  baseCurrencyUnit: bigint
+): number | null {
+  if (decimals < 0 || assetPriceInBase <= 0n || baseCurrencyUnit <= 0n) {
+    return null;
+  }
+
+  const tokenUnit = 10n ** BigInt(decimals);
+  const supplyInBase = (supplyRaw * assetPriceInBase) / tokenUnit;
+  const dollars = Number(supplyInBase) / Number(baseCurrencyUnit);
+  return Number.isFinite(dollars) ? dollars : null;
+}
+
+async function loadAaveV3Markets(network: "mainnet" | "sepolia"): Promise<LendingMarket[]> {
+  if (network !== "mainnet") {
+    return [];
+  }
+
+  const protocol = MANTLE_PROTOCOLS[network].aave_v3;
+  if (!protocol || protocol.status !== "enabled") {
+    return [];
+  }
+
+  const poolAddressesProviderInput = protocol.contracts.pool_addresses_provider;
+  const dataProviderInput = protocol.contracts.pool_data_provider;
+  if (
+    !poolAddressesProviderInput ||
+    !dataProviderInput ||
+    !isAddress(poolAddressesProviderInput, { strict: false }) ||
+    !isAddress(dataProviderInput, { strict: false })
+  ) {
+    throw new MantleMcpError(
+      "LENDING_DATA_UNAVAILABLE",
+      "Aave V3 provider addresses are missing or invalid.",
+      "Verify Mantle protocol registry for aave_v3 contract addresses.",
+      { network, protocol: "aave_v3" }
+    );
+  }
+
+  const poolAddressesProvider = getAddress(poolAddressesProviderInput);
+  const dataProvider = getAddress(dataProviderInput);
+  const client = getPublicClient(network);
+
+  const reserves = (await client.readContract({
+    address: dataProvider,
+    abi: AAVE_PROTOCOL_DATA_PROVIDER_ABI,
+    functionName: "getAllReservesTokens"
+  })) as Array<{ symbol: string; tokenAddress: string }>;
+
+  const oracleAddress = (await client.readContract({
+    address: poolAddressesProvider,
+    abi: AAVE_POOL_ADDRESSES_PROVIDER_ABI,
+    functionName: "getPriceOracle"
+  })) as string;
+
+  if (!isAddress(oracleAddress, { strict: false })) {
+    throw new MantleMcpError(
+      "LENDING_DATA_UNAVAILABLE",
+      "Aave oracle address is invalid.",
+      "Retry later or verify pool addresses provider configuration.",
+      { network, protocol: "aave_v3", oracle_address: oracleAddress }
+    );
+  }
+
+  const oracle = getAddress(oracleAddress);
+  const [baseCurrency, baseCurrencyUnit] = (await Promise.all([
+    client.readContract({
+      address: oracle,
+      abi: AAVE_ORACLE_ABI,
+      functionName: "BASE_CURRENCY"
+    }),
+    client.readContract({
+      address: oracle,
+      abi: AAVE_ORACLE_ABI,
+      functionName: "BASE_CURRENCY_UNIT"
+    })
+  ])) as [string, bigint];
+
+  const isUsdBaseCurrency = baseCurrency.toLowerCase() === ZERO_ADDRESS;
+
+  const markets = await Promise.all(
+    reserves.map(async (reserve): Promise<LendingMarket | null> => {
+      const assetAddress = getAddress(reserve.tokenAddress);
+      const [reserveData, reserveConfig, assetPrice] = (await Promise.all([
+        client.readContract({
+          address: dataProvider,
+          abi: AAVE_PROTOCOL_DATA_PROVIDER_ABI,
+          functionName: "getReserveData",
+          args: [assetAddress]
+        }),
+        client.readContract({
+          address: dataProvider,
+          abi: AAVE_PROTOCOL_DATA_PROVIDER_ABI,
+          functionName: "getReserveConfigurationData",
+          args: [assetAddress]
+        }),
+        client.readContract({
+          address: oracle,
+          abi: AAVE_ORACLE_ABI,
+          functionName: "getAssetPrice",
+          args: [assetAddress]
+        })
+      ])) as [readonly unknown[], readonly unknown[], bigint];
+
+      const isActive = Boolean(reserveConfig[8]);
+      if (!isActive) {
+        return null;
+      }
+
+      const decimals = Number(asBigInt(reserveConfig[0]));
+      const ltv = bpsToPercent(asBigInt(reserveConfig[1]));
+      const liquidationThreshold = bpsToPercent(asBigInt(reserveConfig[2]));
+      const stableBorrowRateEnabled = Boolean(reserveConfig[7]);
+
+      const totalAToken = asBigInt(reserveData[2]);
+      const liquidityRate = asBigInt(reserveData[5]);
+      const variableBorrowRate = asBigInt(reserveData[6]);
+      const stableBorrowRate = asBigInt(reserveData[7]);
+
+      const tvlUsd = isUsdBaseCurrency
+        ? toUsdValue(totalAToken, decimals, assetPrice, baseCurrencyUnit)
+        : null;
+
+      return {
+        protocol: "aave_v3",
+        asset: reserve.symbol,
+        asset_address: assetAddress,
+        supply_apy: rayToPercent(liquidityRate),
+        borrow_apy_variable: rayToPercent(variableBorrowRate),
+        borrow_apy_stable: stableBorrowRateEnabled ? rayToPercent(stableBorrowRate) : null,
+        tvl_usd: tvlUsd,
+        ltv,
+        liquidation_threshold: liquidationThreshold
+      };
+    })
+  );
+
+  return markets.filter((item): item is LendingMarket => item !== null);
+}
+
 const defaultLendingDeps: LendingMarketsDeps = {
-  marketProvider: async () => [],
+  marketProvider: async ({ protocol, network }) => {
+    if (protocol !== "aave_v3") {
+      return [];
+    }
+
+    try {
+      return await loadAaveV3Markets(network);
+    } catch (error) {
+      if (error instanceof MantleMcpError) {
+        throw error;
+      }
+
+      throw new MantleMcpError(
+        "LENDING_DATA_UNAVAILABLE",
+        error instanceof Error ? error.message : String(error),
+        "Check RPC health and Aave provider/oracle reachability, then retry.",
+        { network, protocol: "aave_v3", retryable: true }
+      );
+    }
+  },
   now: () => new Date().toISOString()
 };
 
@@ -502,6 +778,15 @@ export async function getLendingMarkets(
   ]);
 
   const allMarkets = marketChunks.flat();
+  if (allMarkets.length === 0 && network === "mainnet" && protocol === "aave_v3") {
+    throw new MantleMcpError(
+      "LENDING_DATA_UNAVAILABLE",
+      "No Aave V3 market data could be retrieved for Mantle mainnet.",
+      "Retry after checking RPC health, or run mantle_checkRpcHealth first.",
+      { protocol: "aave_v3", network }
+    );
+  }
+
   const filteredMarkets = asset
     ? allMarkets.filter(
         (market) =>
