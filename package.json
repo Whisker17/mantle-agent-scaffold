@@ -1,6 +1,6 @@
 {
   "name": "mantle-mcp",
-  "version": "0.2.7",
+  "version": "0.2.9",
   "description": "MCP server for AI-driven Mantle L2 development - chain reads, simulation, and unsigned transaction building",
   "type": "module",
   "main": "dist/index.js",
@@ -21,6 +21,8 @@
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
+    "skills:init": "git submodule update --init --recursive skills",
+    "skills:sync": "git submodule update --init --remote skills && git add skills",
     "pretest": "npm run build",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",

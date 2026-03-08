@@ -1,4 +1,0 @@
-interface:
-  display_name: "Mantle Network Primer"
-  short_description: "Guide Mantle network basics and architecture"
-  default_prompt: "Use $mantle-network-primer to explain Mantle L2 basics, gas model, and finality to a user."

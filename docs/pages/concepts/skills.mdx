@@ -1,6 +1,7 @@
 # Skills and MCP Usage
 
 This page explains how the local `skills/` library and `mantle-mcp` are intended to work together.
+The repository keeps the `skills/` submodule path stable, but the actual skill folders come from `Whisker17/mantle-skills` under `skills/skills/`.
 
 ## Operating Model
 
@@ -16,7 +17,8 @@ A reliable agent loop is:
 
 ## How To Use Skills
 
-All project skills live in `skills/<skill-name>/SKILL.md` with references and agent manifests.
+All project skills live in `skills/skills/<skill-name>/SKILL.md` with references and agent manifests.
+If the checkout is missing after clone, run `npm run skills:init` to initialize the `mantle-skills` submodule.
 
 Recommended usage flow:
 

@@ -17,7 +17,7 @@ const program = new Command();
 program
   .name("mantle-cli")
   .description("CLI for Mantle L2 chain reads, token operations, and DeFi queries")
-  .version("0.2.7")
+  .version("0.2.9")
   .option("-n, --network <network>", "target network (mainnet, sepolia)", "mainnet")
   .option("--json", "output raw JSON", false)
   .option("--no-color", "disable colored output")
