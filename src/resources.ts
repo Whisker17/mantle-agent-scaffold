@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { CHAIN_CONFIGS } from "./config/chains.js";
 import { getRegistryData } from "./lib/registry.js";
+import { readSkillsReference } from "./lib/skills-path.js";
 import { MANTLE_TOKENS } from "./config/tokens.js";
 import { MANTLE_PROTOCOLS } from "./config/protocols.js";
 import type { Resource } from "./types.js";
@@ -51,11 +50,6 @@ const RESOURCES: Resource[] = [
   }
 ];
 
-function readReference(relativePath: string): string {
-  const absolutePath = path.resolve(process.cwd(), relativePath);
-  return readFileSync(absolutePath, "utf8");
-}
-
 export function listResources(): Resource[] {
   return RESOURCES;
 }
@@ -98,14 +92,14 @@ export function readResource(uri: string): { content: string; mimeType: string }
 
   if (uri === "mantle://docs/network-basics") {
     return {
-      content: readReference("skills/mantle-network-primer/references/mantle-network-basics.md"),
+      content: readSkillsReference("skills/mantle-network-primer/references/mantle-network-basics.md"),
       mimeType: "text/markdown"
     };
   }
 
   if (uri === "mantle://docs/risk-checklist") {
     return {
-      content: readReference("skills/mantle-risk-evaluator/references/risk-checklist.md"),
+      content: readSkillsReference("skills/mantle-risk-evaluator/references/risk-checklist.md"),
       mimeType: "text/markdown"
     };
   }

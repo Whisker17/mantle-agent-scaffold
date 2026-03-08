@@ -1,4 +1,0 @@
-interface:
-  display_name: "Mantle Smart Contract Deployer"
-  short_description: "Plan deployment and verification on Mantle"
-  default_prompt: "Use $mantle-smart-contract-deployer to prepare a deployment handoff and verification evidence plan for a smart contract on Mantle."

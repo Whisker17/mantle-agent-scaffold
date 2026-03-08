@@ -15,7 +15,7 @@ import { allTools } from "./tools/index.js";
 
 export function createServer(): Server {
   const server = new Server(
-    { name: "mantle-mcp", version: "0.2.7" },
+    { name: "mantle-mcp", version: "0.2.9" },
     {
       capabilities: {
         tools: {},

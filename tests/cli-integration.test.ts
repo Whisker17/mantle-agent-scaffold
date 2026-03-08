@@ -49,7 +49,7 @@ describe("CLI integration", () => {
   it("shows version with --version", async () => {
     const { stdout, exitCode } = await run(["--version"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toBe("0.2.7");
+    expect(stdout.trim()).toBe("0.2.9");
   });
 
   it("chain info returns static config as JSON", async () => {

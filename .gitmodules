@@ -1,0 +1,4 @@
+[submodule "skills"]
+	path = skills
+	url = https://github.com/Whisker17/mantle-skills.git
+	branch = main
