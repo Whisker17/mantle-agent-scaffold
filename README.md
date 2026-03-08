@@ -1,4 +1,4 @@
-# mantle-mcp (v0.2.7)
+# mantle-mcp (v0.2.9)
 
 MCP server for Mantle L2 with stdio transport and core read-only tools.
 
@@ -38,7 +38,7 @@ Tools:
 
 `mantle-mcp` now uses **intent-routed layered reads** instead of one fixed fallback chain.
 
-Intent routes (v0.2.7):
+Intent routes (v0.2.9):
 
 - `pool_quote` (`mantle_getSwapQuote`): `dexscreener(provider route)` -> `peer provider in best mode` -> `internet (manual only)`.
 - `pool_liquidity` (`mantle_getPoolLiquidity`): `dexscreener pair` -> `subgraph` -> `indexer sql`; valuation path is `dexscreener token prices` -> `defillama prices`.
@@ -101,7 +101,11 @@ Recommended call order for most workflows:
 
 ## How To Use Skills (`skills/`)
 
-Each local skill is in `skills/<name>/SKILL.md` with references and agent config.
+Each local skill is in `skills/skills/<name>/SKILL.md` with references and agent config.
+The `skills/` checkout is sourced from the external `Whisker17/mantle-skills` repository and pinned by this repo.
+After cloning, run `npm run skills:init` if submodules were not initialized.
+Run `npm run skills:sync` when you intentionally want to refresh the pinned `skills/` checkout.
+Because the submodule root also contains its own `README.md` and docs, the actual skill folders live under `skills/skills/`.
 
 Use them as workflow drivers:
 
@@ -154,7 +158,7 @@ Use stdio transport and launch `dist/index.js`:
 External agents should treat `skills/` as workflow policy, not optional reference text:
 
 1. Select skill by user intent.
-2. Read `skills/<skill-name>/SKILL.md` before tool calls.
+2. Read `skills/skills/<skill-name>/SKILL.md` before tool calls.
 3. Apply the checklist and guardrails from that skill.
 4. Use MCP outputs as source-of-truth for the final answer.
 
