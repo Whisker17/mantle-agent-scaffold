@@ -1,0 +1,54 @@
+{
+  "name": "mantle-mcp",
+  "version": "0.2.9",
+  "license": "MIT",
+  "description": "MCP server for AI-driven Mantle L2 development - chain reads, simulation, and unsigned transaction building",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mantle-mcp": "dist/index.js",
+    "mantle-cli": "dist/src/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "SERVER_INSTRUCTIONS.md",
+    "README.md"
+  ],
+  "mcp": {
+    "serverUseInstructions": "Mantle L2 chain tools. Gas token is MNT, not ETH. CRITICAL RULES: (1) NEVER hold or request private keys - all transaction tools return unsigned payloads only. (2) ALWAYS call mantle_resolveAddress or mantle_resolveToken to verify addresses before using them in transaction-building tools; for token symbols, mantle_resolveToken must double-check against https://token-list.mantle.xyz. (3) ALWAYS ensure a fresh simulation result before presenting a transaction for signing (for mantle_build*Tx, use the returned simulation field; use mantle_simulateTx for custom calldata or re-simulation). (4) ALWAYS present the human_summary field to the user and obtain explicit confirmation before any signing step. (5) Gas estimates and native balances are in MNT. (6) When an address cannot be resolved through the registry, STOP and ask the user rather than proceeding with an unverified address."
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "skills:init": "git submodule update --init --recursive skills",
+    "skills:sync": "git submodule update --init --remote skills && git add skills",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:required": "E2E_REQUIRE_LIVE=true vitest run --config vitest.e2e.config.ts",
+    "docs:dev": "npm --prefix docs run dev",
+    "docs:build": "HOME=$PWD/docs npm --prefix docs run build",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "viem": "^2.39.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/anthropic": "^3.0.50",
+    "@ai-sdk/openai": "^3.0.37",
+    "@ai-sdk/provider": "^3.0.8",
+    "@types/node": "^20.17.58",
+    "ai": "^6.0.105",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
