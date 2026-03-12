@@ -3,10 +3,10 @@ import React from "react";
 const config = {
   logo: <span>Mantle MCP Docs</span>,
   project: {
-    link: "https://github.com/Whisker17/mantle-agent-scaffold"
+    link: "https://github.com/mantle-xyz/mantle-agent-scaffold"
   },
   docsRepositoryBase:
-    "https://github.com/Whisker17/mantle-agent-scaffold/tree/main/docs",
+    "https://github.com/mantle-xyz/mantle-agent-scaffold/tree/main/docs",
   footer: {
     text: "Mantle MCP Documentation (v0.2.9)"
   },

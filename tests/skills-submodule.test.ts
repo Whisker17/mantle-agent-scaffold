@@ -7,7 +7,7 @@ describe("skills submodule integration", () => {
 
     expect(gitmodules).toContain('[submodule "skills"]');
     expect(gitmodules).toContain("path = skills");
-    expect(gitmodules).toContain("url = https://github.com/Whisker17/mantle-skills.git");
+    expect(gitmodules).toContain("url = https://github.com/mantle-xyz/mantle-skills.git");
     expect(gitmodules).toContain("branch = main");
   });
 
@@ -22,11 +22,14 @@ describe("skills submodule integration", () => {
     expect(packageJson.scripts?.["skills:init"]).toBeDefined();
     expect(packageJson.scripts?.["skills:sync"]).toBeDefined();
 
+    expect(readme).toContain("mantle-xyz/mantle-skills");
     expect(readme).toContain("npm run skills:init");
     expect(readme).toContain("npm run skills:sync");
     expect(readme).toContain("skills/skills/<skill-name>/SKILL.md");
+    expect(skillsPage).toContain("mantle-xyz/mantle-skills");
     expect(skillsPage).toContain("mantle-skills");
     expect(skillsPage).toContain("skills/skills/<skill-name>/SKILL.md");
+    expect(externalAgentsPage).toContain("mantle-xyz/mantle-skills");
     expect(externalAgentsPage).toContain("npm run skills:init");
     expect(externalAgentsPage).toContain("skills/skills/<skill-name>/SKILL.md");
   });

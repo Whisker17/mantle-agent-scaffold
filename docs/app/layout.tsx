@@ -7,7 +7,7 @@ import "nextra-theme-docs/style.css";
 import themeConfig from "../theme.config";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://whisker17.github.io/mantle-agent-scaffold"),
+  metadataBase: new URL("https://mantle-xyz.github.io/mantle-agent-scaffold"),
   title: {
     default: "Mantle MCP Docs",
     template: "%s - Mantle MCP Docs"

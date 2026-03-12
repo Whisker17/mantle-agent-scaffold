@@ -102,7 +102,7 @@ Recommended call order for most workflows:
 ## How To Use Skills (`skills/`)
 
 Each local skill is in `skills/skills/<name>/SKILL.md` with references and agent config.
-The `skills/` checkout is sourced from the external `Whisker17/mantle-skills` repository and pinned by this repo.
+The `skills/` checkout is sourced from the external `mantle-xyz/mantle-skills` repository and pinned by this repo.
 After cloning, run `npm run skills:init` if submodules were not initialized.
 Run `npm run skills:sync` when you intentionally want to refresh the pinned `skills/` checkout.
 Because the submodule root also contains its own `README.md` and docs, the actual skill folders live under `skills/skills/`.
@@ -256,7 +256,8 @@ npm run docs:build
 ```
 
 GitHub Pages:
-- Site URL: `https://whisker17.github.io/mantle-agent-scaffold/`
+- Site URL: `https://mantle-xyz.github.io/mantle-agent-scaffold/`
 - Workflow: `.github/workflows/docs-pages.yml`
 - Trigger: push to `main` on `docs/**` (or manual workflow dispatch)
 - Build output: static export from `docs/out`
+- One-time setup: GitHub Pages must already be enabled for this repository. If admins add a `PAGES_ENABLEMENT_TOKEN` secret (PAT with repo admin access), the workflow can auto-enable Pages. Otherwise, enable `Settings -> Pages -> Build and deployment -> Source = GitHub Actions` once before the first deploy.
