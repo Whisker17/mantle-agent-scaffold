@@ -9,16 +9,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "14.2.5",
-    "nextra": "2.13.4",
-    "nextra-theme-docs": "2.13.4",
-    "react": "18.2.0",
-    "react-dom": "18.2.0"
+    "next": "^16.1.6",
+    "nextra": "^4.6.1",
+    "nextra-theme-docs": "^4.6.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@types/node": "20.17.58",
-    "@types/react": "18.3.12",
-    "@types/react-dom": "18.3.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
     "typescript": "5.9.3"
   }
 }

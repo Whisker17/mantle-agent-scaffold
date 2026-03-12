@@ -244,6 +244,7 @@ npm run test:e2e
 Notes:
 - `npm run test:e2e` does not auto-load `.env`; export env vars first.
 - OpenRouter mode uses provider-compatible settings in runner (no `stopWhen`).
+- For release gating, use `npm run test:e2e:required` to fail fast when live LLM config is missing.
 
 ## Documentation Site (Nextra)
 

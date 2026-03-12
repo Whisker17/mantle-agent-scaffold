@@ -1,9 +1,12 @@
 import nextra from "nextra";
+import { fileURLToPath } from "node:url";
 
 const withNextra = nextra({
-  theme: "nextra-theme-docs",
-  themeConfig: "./theme.config.tsx"
+  search: {
+    codeblocks: false
+  }
 });
+const docsRoot = fileURLToPath(new URL(".", import.meta.url));
 
 const isGithubActions = process.env.GITHUB_ACTIONS === "true";
 const repository = process.env.GITHUB_REPOSITORY ?? "";
@@ -16,6 +19,9 @@ export default withNextra({
   trailingSlash: true,
   images: {
     unoptimized: true
+  },
+  turbopack: {
+    root: docsRoot
   },
   ...(basePath
     ? {

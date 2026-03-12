@@ -1,6 +1,7 @@
 {
   "name": "mantle-mcp",
   "version": "0.2.9",
+  "license": "MIT",
   "description": "MCP server for AI-driven Mantle L2 development - chain reads, simulation, and unsigned transaction building",
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +11,7 @@
   },
   "files": [
     "dist",
+    "LICENSE",
     "SERVER_INSTRUCTIONS.md",
     "README.md"
   ],
@@ -26,6 +28,7 @@
     "pretest": "npm run build",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:required": "E2E_REQUIRE_LIVE=true vitest run --config vitest.e2e.config.ts",
     "docs:dev": "npm --prefix docs run dev",
     "docs:build": "HOME=$PWD/docs npm --prefix docs run build",
     "prepublishOnly": "npm run build"

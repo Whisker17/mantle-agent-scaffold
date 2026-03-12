@@ -16,8 +16,8 @@ describe("skills submodule integration", () => {
       scripts?: Record<string, string>;
     };
     const readme = readFileSync("README.md", "utf8");
-    const skillsPage = readFileSync("docs/pages/concepts/skills.mdx", "utf8");
-    const externalAgentsPage = readFileSync("docs/pages/concepts/external-agents.mdx", "utf8");
+    const skillsPage = readFileSync("docs/content/concepts/skills.mdx", "utf8");
+    const externalAgentsPage = readFileSync("docs/content/concepts/external-agents.mdx", "utf8");
 
     expect(packageJson.scripts?.["skills:init"]).toBeDefined();
     expect(packageJson.scripts?.["skills:sync"]).toBeDefined();

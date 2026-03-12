@@ -8,7 +8,7 @@ const config = {
   docsRepositoryBase:
     "https://github.com/Whisker17/mantle-agent-scaffold/tree/main/docs",
   footer: {
-    text: "Mantle MCP Documentation (v0.2.5)"
+    text: "Mantle MCP Documentation (v0.2.9)"
   },
   useNextSeoProps() {
     return {
@@ -20,7 +20,7 @@ const config = {
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <meta
         name="description"
-        content="Documentation for Mantle MCP implementation up to v0.2.5."
+        content="Documentation for Mantle MCP implementation up to v0.2.9."
       />
       <meta name="og:title" content="Mantle MCP Docs" />
     </>

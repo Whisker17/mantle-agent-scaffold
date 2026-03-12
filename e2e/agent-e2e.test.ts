@@ -8,10 +8,20 @@ import {
 import { allScenarios } from "./scenarios/index.js";
 
 describe("mantle-mcp agent e2e", () => {
+  const requireLive = process.env.E2E_REQUIRE_LIVE === "true";
+
   it("registers all v0.2 scenarios", () => {
     const reporter = createScenarioReporter();
     expect(allScenarios).toHaveLength(19);
     expect(reporter.summary().total).toBe(0);
+  });
+
+  it("requires LLM config when live E2E is enforced", () => {
+    if (!requireLive) {
+      return;
+    }
+
+    expect(hasRequiredLlmConfig()).toBe(true);
   });
 
   const runE2E = hasRequiredLlmConfig() ? it : it.skip;
