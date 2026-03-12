@@ -201,7 +201,7 @@ External endpoint interfaces:
 | `https://openrouter.ai/api/v1` | OpenRouter base URL in E2E openrouter mode |
 
 Full interface mapping (including every resource URI and tool endpoint role):
-- `docs/pages/spec/interfaces.mdx`
+- `docs/pages/concepts/external-agents.mdx`
 
 ## Example MCP Client Config
 
