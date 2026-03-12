@@ -42,7 +42,7 @@ export function registerDiagnostics(parent: Command): void {
   group
     .command("probe")
     .description("Probe a JSON-RPC endpoint with a minimal method call")
-    .requiredOption("--rpc-url <url>", "RPC endpoint to probe")
+    .option("--rpc-url <url>", "RPC endpoint to probe")
     .option("--method <method>", "RPC method (eth_chainId, eth_blockNumber, eth_getBalance)", "eth_blockNumber")
     .option("--params <json>", "optional method params as JSON array")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
@@ -51,7 +51,7 @@ export function registerDiagnostics(parent: Command): void {
         ? parseJsonArray(opts.params as string, "params")
         : undefined;
       const result = await allTools["mantle_probeEndpoint"].handler({
-        rpc_url: opts.rpcUrl,
+        rpc_url: opts.rpcUrl ?? globals.rpcUrl,
         method: opts.method,
         params,
         network: globals.network
