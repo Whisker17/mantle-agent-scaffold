@@ -323,7 +323,35 @@ function addUsage(current: ScenarioUsage, next: ScenarioUsage): ScenarioUsage {
 }
 
 function isRetryableFailure(type: ScenarioFailureType): boolean {
-  return type === "WRONG_ARGS" || type === "ASSERTION_FAILED";
+  return type === "WRONG_ARGS" || type === "ASSERTION_FAILED" || type === "LLM_ERROR";
+}
+
+const PLACEHOLDER_ENV_VALUES = new Set([
+  "https://your-subgraph-endpoint",
+  "https://your-sql-endpoint",
+  "your-api-key-here"
+]);
+
+function isConfiguredEnvValue(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (PLACEHOLDER_ENV_VALUES.has(lower)) {
+    return false;
+  }
+
+  if (lower.startsWith("https://your-") || lower.startsWith("http://your-")) {
+    return false;
+  }
+
+  return true;
 }
 
 function classifyUnexpectedError(error: unknown): ScenarioFailure {
@@ -586,15 +614,29 @@ export class E2EAgentRunner {
   async runScenario(scenario: AgentScenario): Promise<ScenarioRunRecord> {
     const scenarioStart = Date.now();
 
-    if (scenario.skipUnless && !this.env[scenario.skipUnless]) {
-      return {
-        scenarioId: scenario.id,
-        status: "skipped",
-        attempts: 0,
-        durationMs: Date.now() - scenarioStart,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        skipReason: `${scenario.skipUnless} not set`
-      };
+    if (scenario.skipUnless) {
+      const skipEnvValue = this.env[scenario.skipUnless];
+      if (!skipEnvValue) {
+        return {
+          scenarioId: scenario.id,
+          status: "skipped",
+          attempts: 0,
+          durationMs: Date.now() - scenarioStart,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          skipReason: `${scenario.skipUnless} not set`
+        };
+      }
+
+      if (!isConfiguredEnvValue(skipEnvValue)) {
+        return {
+          scenarioId: scenario.id,
+          status: "skipped",
+          attempts: 0,
+          durationMs: Date.now() - scenarioStart,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          skipReason: `${scenario.skipUnless} is a placeholder value`
+        };
+      }
     }
 
     if (!this.model) {

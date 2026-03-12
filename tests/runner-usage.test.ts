@@ -379,4 +379,69 @@ describe("E2EAgentRunner usage accounting", () => {
     expect(promptArg).toContain("You must call mantle_getBalance exactly once");
     expect(promptArg).toContain("run tool");
   });
+
+  it("retries transient LLM errors before failing the scenario", async () => {
+    generateTextMock
+      .mockRejectedValueOnce(new Error("Internal Server Error"))
+      .mockResolvedValueOnce(
+        generateResult({
+          inputTokens: 2,
+          outputTokens: 1,
+          text: "ok"
+        })
+      );
+
+    const runner = new E2EAgentRunner({
+      E2E_LLM_PROVIDER: "openai",
+      E2E_LLM_API_KEY: "test-key",
+      E2E_MAX_RETRIES: "1"
+    });
+
+    const result = await runner.runScenario(buildScenario());
+
+    expect(result.status).toBe("passed");
+    expect(result.attempts).toBe(2);
+  });
+
+  it("skips scenarios when skipUnless points to a placeholder endpoint", async () => {
+    const runner = new E2EAgentRunner({
+      E2E_LLM_PROVIDER: "openai",
+      E2E_LLM_API_KEY: "test-key",
+      E2E_MAX_RETRIES: "0",
+      E2E_SUBGRAPH_ENDPOINT: "https://your-subgraph-endpoint"
+    });
+
+    const result = await runner.runScenario(
+      buildScenario({ skipUnless: "E2E_SUBGRAPH_ENDPOINT" })
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.attempts).toBe(0);
+    expect(result.skipReason).toContain("placeholder");
+    expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
+  it("runs scenarios when skipUnless value is configured", async () => {
+    generateTextMock.mockResolvedValueOnce(
+      generateResult({
+        inputTokens: 2,
+        outputTokens: 1,
+        text: "ok"
+      })
+    );
+
+    const runner = new E2EAgentRunner({
+      E2E_LLM_PROVIDER: "openai",
+      E2E_LLM_API_KEY: "test-key",
+      E2E_MAX_RETRIES: "0",
+      E2E_SUBGRAPH_ENDPOINT: "https://indexer.example.org/graphql"
+    });
+
+    const result = await runner.runScenario(
+      buildScenario({ skipUnless: "E2E_SUBGRAPH_ENDPOINT" })
+    );
+
+    expect(result.status).toBe("passed");
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+  });
 });
