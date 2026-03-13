@@ -16,5 +16,7 @@ describe("docs pages configuration", () => {
 
     expect(workflow).toContain("PAGES_ENABLEMENT_TOKEN");
     expect(workflow).toContain("enablement: true");
+    expect(workflow).toContain("HAS_PAGES_ENABLEMENT_TOKEN");
+    expect(workflow).not.toContain("if: ${{ secrets.PAGES_ENABLEMENT_TOKEN");
   });
 });
