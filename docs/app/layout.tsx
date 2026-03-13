@@ -12,7 +12,7 @@ export const metadata: Metadata = {
     default: "Mantle MCP Docs",
     template: "%s - Mantle MCP Docs"
   },
-  description: "Documentation for Mantle MCP implementation up to v0.2.9."
+  description: "Documentation for Mantle MCP implementation up to v0.1.0."
 };
 
 const navbar = <Navbar logo={themeConfig.logo} projectLink={themeConfig.project?.link} />;
@@ -45,7 +45,7 @@ export default async function RootLayout({
       </Head>
       <body>
         <Layout
-          banner={<Banner storageKey="mantle-mcp-docs-banner">Mantle MCP v0.2.9</Banner>}
+          banner={<Banner storageKey="mantle-mcp-docs-banner">Mantle MCP v0.1.0</Banner>}
           navbar={navbar}
           pageMap={await getPageMap()}
           docsRepositoryBase={themeConfig.docsRepositoryBase}

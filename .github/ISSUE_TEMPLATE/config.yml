@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support
+    url: https://github.com/mantle-xyz/mantle-agent-scaffold/blob/main/SUPPORT.md
+    about: Start here for usage questions and general support.
+  - name: Security policy
+    url: https://github.com/mantle-xyz/mantle-agent-scaffold/blob/main/SECURITY.md
+    about: Do not disclose vulnerabilities in public issues.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { MantleMcpError } from "../errors.js";
+import { MantleMcpError } from "../src/errors.js";
 import { disableColors, formatError, formatJson } from "./formatter.js";
 import { applyRpcOverride } from "./utils.js";
 import { registerChain } from "./commands/chain.js";
@@ -17,7 +17,7 @@ const program = new Command();
 program
   .name("mantle-cli")
   .description("CLI for Mantle L2 chain reads, token operations, and DeFi queries")
-  .version("0.2.9")
+  .version("0.1.0")
   .option("-n, --network <network>", "target network (mainnet, sepolia)", "mainnet")
   .option("--json", "output raw JSON", false)
   .option("--no-color", "disable colored output")

@@ -16,6 +16,7 @@
     ]
   },
   "include": [
+    "cli/**/*.ts",
     "src/**/*.ts",
     "tests/**/*.ts",
     "e2e/**/*.ts",

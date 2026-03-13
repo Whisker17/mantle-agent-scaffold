@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const CLI_PATH = resolve(import.meta.dirname, "../dist/src/cli/index.js");
+const CLI_PATH = resolve(import.meta.dirname, "../dist/cli/index.js");
 
 function run(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return execFileAsync("node", [CLI_PATH, ...args], { timeout: 10000 })
@@ -55,7 +55,7 @@ describe("CLI integration", () => {
   it("shows version with --version", async () => {
     const { stdout, exitCode } = await run(["--version"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toBe("0.2.9");
+    expect(stdout.trim()).toBe("0.1.0");
   });
 
   it("chain info returns static config as JSON", async () => {

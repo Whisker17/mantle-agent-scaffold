@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { allTools } from "../../tools/index.js";
+import { allTools } from "../../src/tools/index.js";
 import { formatKeyValue, formatTable, formatJson } from "../formatter.js";
 import { parseCommaList } from "../utils.js";
 

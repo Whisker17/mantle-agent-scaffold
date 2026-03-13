@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import { MantleMcpError } from "../errors.js";
+import { MantleMcpError } from "../src/errors.js";
 
 export function parseCommaList(value: string): string[] {
   return value

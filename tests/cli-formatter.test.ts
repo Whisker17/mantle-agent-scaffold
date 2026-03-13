@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { formatKeyValue, formatJson, formatTable, formatError } from "../src/cli/formatter.js";
+import { formatKeyValue, formatJson, formatTable, formatError } from "../cli/formatter.js";
 
 describe("formatJson", () => {
   it("outputs pretty-printed JSON to stdout", () => {

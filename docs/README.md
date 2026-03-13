@@ -4,7 +4,7 @@ This directory hosts the Nextra documentation site for Mantle MCP.
 
 ## Scope
 
-Current content is aligned to implementation status up to **v0.2.9**.
+Current content is aligned to implementation status up to **v0.1.0**.
 
 ## Run Locally
 

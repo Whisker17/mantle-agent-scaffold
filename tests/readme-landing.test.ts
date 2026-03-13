@@ -2,13 +2,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("readme landing page", () => {
-  it("keeps the root README short and integration-focused", () => {
+  it("keeps the root README short and organized around skills, mcp, and cli", () => {
     const readme = readFileSync("README.md", "utf8");
 
     expect(readme).toContain("# mantle-agent-scaffold");
     expect(readme).toContain("## Quick Start");
-    expect(readme).toContain("## Use The Skills Checkout");
-    expect(readme).toContain("## Minimal MCP Client Config");
+    expect(readme).toContain("## Skills");
+    expect(readme).toContain("## MCP");
+    expect(readme).toContain("## CLI");
     expect(readme).toContain("## Verify");
     expect(readme).toContain("## Documentation");
 
@@ -27,5 +28,7 @@ describe("readme landing page", () => {
     expect(readme).toContain("/concepts/external-agents");
     expect(readme).toContain("/concepts/testing");
     expect(readme).toContain("https://mantle-xyz.github.io/mantle-agent-scaffold/");
+    expect(readme).toContain("src/README.md");
+    expect(readme).toContain("cli/README.md");
   });
 });

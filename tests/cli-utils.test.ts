@@ -6,7 +6,7 @@ import {
   applyRpcOverride,
   parseIntegerOption,
   parseNumberOption
-} from "../src/cli/utils.js";
+} from "../cli/utils.js";
 
 describe("parseCommaList", () => {
   it("splits comma-separated values", () => {
