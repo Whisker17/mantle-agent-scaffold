@@ -2,6 +2,8 @@
 
 Mantle MCP server for AI agents. Provides read and write tools for DeFi operations on Mantle L2 — swap, LP, lending (Aave V3), token approvals, and more. All write tools return unsigned transaction payloads; they never hold private keys or broadcast.
 
+Supported protocols: **Merchant Moe**, **Agni Finance**, **Fluxion**, **Aave V3**.
+
 ## Install as MCP Server
 
 Add to your `.mcp.json` or Claude Code `settings.json`:
@@ -21,7 +23,7 @@ Add to your `.mcp.json` or Claude Code `settings.json`:
 }
 ```
 
-That's it. `npx` will fetch the repo, install dependencies, build TypeScript automatically via the `prepare` hook, and start the stdio server.
+Restart your agent after adding the config. `npx` will fetch the repo, install dependencies, build automatically, and start the MCP server over stdio.
 
 ## Available Tools
 
