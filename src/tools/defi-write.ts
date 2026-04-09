@@ -58,6 +58,12 @@ import { AAVE_V3_POOL_ABI, AAVE_V3_WETH_GATEWAY_ABI } from "../lib/abis/aave-v3-
 const DEFAULT_DEADLINE_SECONDS = 1200; // 20 minutes
 const MAX_UINT256 = 2n ** 256n - 1n;
 
+/**
+ * Common bridge tokens used as intermediaries for multi-hop routing.
+ * Ordered by preference (most liquid first).
+ */
+const BRIDGE_TOKENS = ["WMNT", "USDC", "USDT0", "USDe", "WETH"] as const;
+
 /** Derive chain ID from network config instead of hardcoding. */
 function chainId(network: Network): number {
   return CHAIN_CONFIGS[network].chain_id;
@@ -430,6 +436,112 @@ export async function buildUnwrapMnt(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Multi-hop routing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a V3 packed path for exactInput: token(20) + fee(3) + token(20) ...
+ */
+function encodeV3Path(tokens: string[], fees: number[]): `0x${string}` {
+  let path = tokens[0].toLowerCase().slice(2);
+  for (let i = 0; i < fees.length; i++) {
+    path += fees[i].toString(16).padStart(6, "0");
+    path += tokens[i + 1].toLowerCase().slice(2);
+  }
+  return `0x${path}` as `0x${string}`;
+}
+
+interface V3Route {
+  tokens: ResolvedToken[];
+  fees: number[];
+}
+
+interface MoeRoute {
+  tokens: ResolvedToken[];
+  binSteps: number[];
+  routerVersions: number[];
+}
+
+/**
+ * Find a 2-hop V3 route via common bridge tokens.
+ * Returns the first viable route or null.
+ */
+function findV3Route(
+  provider: "agni" | "fluxion",
+  tokenIn: ResolvedToken,
+  tokenOut: ResolvedToken,
+  network: Network
+): V3Route | null {
+  for (const bridge of BRIDGE_TOKENS) {
+    // Skip if bridge is same as in or out
+    if (bridge.toLowerCase() === tokenIn.symbol.toLowerCase()) continue;
+    if (bridge.toLowerCase() === tokenOut.symbol.toLowerCase()) continue;
+
+    const legA =
+      findPair(provider, tokenIn.symbol, bridge, network) ??
+      findPairByAddress(provider, tokenIn.address, "", network); // fallback not useful here
+    const legB =
+      findPair(provider, bridge, tokenOut.symbol, network);
+
+    if (legA && legB && legA.provider !== "merchant_moe" && legB.provider !== "merchant_moe") {
+      // Need to resolve the bridge token address from the pair
+      const bridgeAddress =
+        legA.tokenA.toLowerCase() === tokenIn.symbol.toLowerCase()
+          ? legA.tokenBAddress
+          : legA.tokenAAddress;
+
+      return {
+        tokens: [
+          tokenIn,
+          { address: bridgeAddress, symbol: bridge, decimals: 0 }, // decimals not needed for path encoding
+          tokenOut
+        ],
+        fees: [(legA as V3Pair).feeTier, (legB as V3Pair).feeTier]
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Find a 2-hop Merchant Moe route via common bridge tokens.
+ */
+function findMoeRoute(
+  tokenIn: ResolvedToken,
+  tokenOut: ResolvedToken,
+  network: Network
+): MoeRoute | null {
+  for (const bridge of BRIDGE_TOKENS) {
+    if (bridge.toLowerCase() === tokenIn.symbol.toLowerCase()) continue;
+    if (bridge.toLowerCase() === tokenOut.symbol.toLowerCase()) continue;
+
+    const legA = findPair("merchant_moe", tokenIn.symbol, bridge, network);
+    const legB = findPair("merchant_moe", bridge, tokenOut.symbol, network);
+
+    if (legA && legB && legA.provider === "merchant_moe" && legB.provider === "merchant_moe") {
+      const bridgeAddress =
+        legA.tokenA.toLowerCase() === tokenIn.symbol.toLowerCase()
+          ? legA.tokenBAddress
+          : legA.tokenAAddress;
+
+      return {
+        tokens: [
+          tokenIn,
+          { address: bridgeAddress, symbol: bridge, decimals: 0 },
+          tokenOut
+        ],
+        binSteps: [(legA as MoePair).binStep, (legB as MoePair).binStep],
+        routerVersions: [
+          (legA as MoePair).routerVersion ?? 0,
+          (legB as MoePair).routerVersion ?? 0
+        ]
+      };
+    }
+  }
+  return null;
+}
+
 // =========================================================================
 // Tool 4: mantle_buildSwap
 // =========================================================================
@@ -471,26 +583,78 @@ export async function buildSwap(
   const deadline = d.deadline();
 
   if (provider === "agni" || provider === "fluxion") {
-    // Resolve fee_tier: caller > known pair > error
-    let feeTier: number;
+    // Resolve fee_tier: caller > known pair > multi-hop > error
+    let feeTier: number | undefined;
     if (typeof args.fee_tier === "number") {
       feeTier = args.fee_tier;
     } else if (knownPair && knownPair.provider !== "merchant_moe") {
       feeTier = (knownPair as V3Pair).feeTier;
-    } else {
-      const available = listPairs(provider).map(
-        (p) => `${p.tokenA}/${p.tokenB}`
-      );
-      throw new MantleMcpError(
-        "UNKNOWN_PAIR",
-        `No known fee_tier for ${tokenIn.symbol}/${tokenOut.symbol} on ${provider}. Provide fee_tier explicitly.`,
-        `Known pairs on ${provider}: ${available.join(", ") || "none"}. Common fee tiers: 500 (0.05%), 3000 (0.3%), 10000 (1%).`,
-        { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
-      );
     }
 
-    return buildV3Swap({
-      provider,
+    if (feeTier !== undefined) {
+      return buildV3Swap({
+        provider,
+        tokenIn,
+        tokenOut,
+        amountInRaw,
+        amountInDecimal,
+        amountOutMin,
+        slippageBps,
+        recipient,
+        deadline,
+        network,
+        feeTier,
+        now: d.now()
+      });
+    }
+
+    // No direct pair — try multi-hop via bridge token
+    const route = findV3Route(provider, tokenIn, tokenOut, network);
+    if (route) {
+      return buildV3MultihopSwap({
+        provider,
+        route,
+        tokenIn,
+        tokenOut,
+        amountInRaw,
+        amountInDecimal,
+        amountOutMin,
+        recipient,
+        deadline,
+        network,
+        now: d.now()
+      });
+    }
+
+    const available = listPairs(provider).map(
+      (p) => `${p.tokenA}/${p.tokenB}`
+    );
+    throw new MantleMcpError(
+      "UNKNOWN_PAIR",
+      `No known fee_tier or multi-hop route for ${tokenIn.symbol}/${tokenOut.symbol} on ${provider}. Provide fee_tier explicitly.`,
+      `Known pairs on ${provider}: ${available.join(", ") || "none"}. Common fee tiers: 500 (0.05%), 3000 (0.3%), 10000 (1%).`,
+      { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
+    );
+  }
+
+  // merchant_moe — resolve bin_step: caller > known pair > multi-hop > error
+  let binStep: number | undefined;
+  let routerVersion: number = 0; // default V1 — works for all Moe pools
+  if (typeof args.bin_step === "number") {
+    binStep = args.bin_step;
+  } else if (knownPair && knownPair.provider === "merchant_moe") {
+    binStep = (knownPair as MoePair).binStep;
+  }
+
+  if (binStep !== undefined) {
+    // Resolve router version: caller > known pair > default (0 = V1)
+    if (typeof args.router_version === "number") {
+      routerVersion = args.router_version;
+    } else if (knownPair && knownPair.provider === "merchant_moe") {
+      routerVersion = (knownPair as MoePair).routerVersion ?? 0;
+    }
+
+    return buildMoeSwap({
       tokenIn,
       tokenOut,
       amountInRaw,
@@ -500,51 +664,38 @@ export async function buildSwap(
       recipient,
       deadline,
       network,
-      feeTier,
+      binStep,
+      routerVersion,
       now: d.now()
     });
   }
 
-  // merchant_moe — resolve bin_step: caller > known pair > error
-  let binStep: number;
-  let routerVersion: number = 0; // default V1 — works for all Moe pools
-  if (typeof args.bin_step === "number") {
-    binStep = args.bin_step;
-  } else if (knownPair && knownPair.provider === "merchant_moe") {
-    binStep = (knownPair as MoePair).binStep;
-  } else {
-    const available = listPairs("merchant_moe").map(
-      (p) => `${p.tokenA}/${p.tokenB}`
-    );
-    throw new MantleMcpError(
-      "UNKNOWN_PAIR",
-      `No known bin_step for ${tokenIn.symbol}/${tokenOut.symbol} on Merchant Moe. Provide bin_step explicitly.`,
-      `Known pairs on Merchant Moe: ${available.join(", ")}. Common bin steps: 1 (stablecoins), 5 (LSTs), 20 (volatile).`,
-      { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
-    );
+  // No direct pair — try multi-hop via bridge token
+  const moeRoute = findMoeRoute(tokenIn, tokenOut, network);
+  if (moeRoute) {
+    return buildMoeMultihopSwap({
+      route: moeRoute,
+      tokenIn,
+      tokenOut,
+      amountInRaw,
+      amountInDecimal,
+      amountOutMin,
+      recipient,
+      deadline,
+      network,
+      now: d.now()
+    });
   }
 
-  // Resolve router version: caller > known pair > default (0 = V1)
-  if (typeof args.router_version === "number") {
-    routerVersion = args.router_version;
-  } else if (knownPair && knownPair.provider === "merchant_moe") {
-    routerVersion = (knownPair as MoePair).routerVersion ?? 0;
-  }
-
-  return buildMoeSwap({
-    tokenIn,
-    tokenOut,
-    amountInRaw,
-    amountInDecimal,
-    amountOutMin,
-    slippageBps,
-    recipient,
-    deadline,
-    network,
-    binStep,
-    routerVersion,
-    now: d.now()
-  });
+  const available = listPairs("merchant_moe").map(
+    (p) => `${p.tokenA}/${p.tokenB}`
+  );
+  throw new MantleMcpError(
+    "UNKNOWN_PAIR",
+    `No known bin_step or multi-hop route for ${tokenIn.symbol}/${tokenOut.symbol} on Merchant Moe. Provide bin_step explicitly.`,
+    `Known pairs on Merchant Moe: ${available.join(", ")}. Common bin steps: 1 (stablecoins), 5 (LSTs), 20 (volatile).`,
+    { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
+  );
 }
 
 function buildV3Swap(params: {
@@ -692,6 +843,138 @@ function buildMoeSwap(params: {
       value: "0x0",
       chainId: chainId(network),
       gas: "0x7A120" // 500000 — safe default for LB swaps
+    },
+    token_info: {
+      token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
+      token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
+    },
+    warnings,
+    built_at_utc: now
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Multi-hop swap builders
+// ---------------------------------------------------------------------------
+
+function buildV3MultihopSwap(params: {
+  provider: "agni" | "fluxion";
+  route: V3Route;
+  tokenIn: ResolvedToken;
+  tokenOut: ResolvedToken;
+  amountInRaw: bigint;
+  amountInDecimal: string;
+  amountOutMin: bigint;
+  recipient: string;
+  deadline: bigint;
+  network: Network;
+  now: string;
+}): UnsignedTxResult {
+  const {
+    provider, route, tokenIn, tokenOut, amountInRaw, amountInDecimal,
+    amountOutMin, recipient, deadline, network, now
+  } = params;
+
+  const routerAddress = getContractAddress(provider, "swap_router", network);
+  const path = encodeV3Path(
+    route.tokens.map((t) => t.address),
+    route.fees
+  );
+  const hops = route.tokens.map((t) => t.symbol).join(" → ");
+
+  const data = encodeFunctionData({
+    abi: V3_SWAP_ROUTER_ABI,
+    functionName: "exactInput",
+    args: [
+      {
+        path,
+        recipient: recipient as `0x${string}`,
+        deadline,
+        amountIn: amountInRaw,
+        amountOutMinimum: amountOutMin
+      }
+    ]
+  });
+
+  const warnings: string[] = [];
+  if (amountOutMin === 0n) {
+    warnings.push(
+      "amountOutMinimum is 0. Multi-hop swaps have higher slippage risk — call mantle_getSwapQuote first."
+    );
+  }
+  warnings.push(`Multi-hop route: ${hops} (fees: ${route.fees.join(" → ")})`);
+
+  const providerLabel = provider === "agni" ? "Agni" : "Fluxion";
+  return {
+    intent: "swap_multihop",
+    human_summary: `Swap ${amountInDecimal} ${tokenIn.symbol} → ${tokenOut.symbol} via ${hops} on ${providerLabel}`,
+    unsigned_tx: {
+      to: routerAddress,
+      data,
+      value: "0x0",
+      chainId: chainId(network),
+      gas: "0x7A120" // 500000 — higher for multi-hop
+    },
+    token_info: {
+      token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
+      token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
+    },
+    warnings,
+    built_at_utc: now
+  };
+}
+
+function buildMoeMultihopSwap(params: {
+  route: MoeRoute;
+  tokenIn: ResolvedToken;
+  tokenOut: ResolvedToken;
+  amountInRaw: bigint;
+  amountInDecimal: string;
+  amountOutMin: bigint;
+  recipient: string;
+  deadline: bigint;
+  network: Network;
+  now: string;
+}): UnsignedTxResult {
+  const {
+    route, tokenIn, tokenOut, amountInRaw, amountInDecimal,
+    amountOutMin, recipient, deadline, network, now
+  } = params;
+
+  const routerAddress = getContractAddress("merchant_moe", "lb_router_v2_2", network);
+  const hops = route.tokens.map((t) => t.symbol).join(" → ");
+
+  const path = {
+    pairBinSteps: route.binSteps.map(BigInt),
+    versions: route.routerVersions,
+    tokenPath: route.tokens.map((t) => t.address as `0x${string}`)
+  };
+
+  const data = encodeFunctionData({
+    abi: LB_ROUTER_ABI,
+    functionName: "swapExactTokensForTokens",
+    args: [amountInRaw, amountOutMin, path, recipient as `0x${string}`, deadline]
+  });
+
+  const warnings: string[] = [];
+  if (amountOutMin === 0n) {
+    warnings.push(
+      "amountOutMin is 0. Multi-hop swaps have higher slippage risk — call mantle_getSwapQuote first."
+    );
+  }
+  warnings.push(
+    `Multi-hop route: ${hops} (binSteps: ${route.binSteps.join(" → ")}, versions: ${route.routerVersions.join(" → ")})`
+  );
+
+  return {
+    intent: "swap_multihop",
+    human_summary: `Swap ${amountInDecimal} ${tokenIn.symbol} → ${tokenOut.symbol} via ${hops} on Merchant Moe`,
+    unsigned_tx: {
+      to: routerAddress,
+      data,
+      value: "0x0",
+      chainId: chainId(network),
+      gas: "0x9EB10" // 650000 — higher for multi-hop
     },
     token_info: {
       token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
