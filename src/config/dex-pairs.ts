@@ -189,6 +189,57 @@ export const XSTOCKS = {
 // ---------------------------------------------------------------------------
 
 const FLUXION_PAIRS: V3Pair[] = [
+  // ---- DeFi pairs (fee_tier 3000 = 0.3%) ----
+  {
+    provider: "fluxion",
+    tokenA: "WMNT", tokenB: "USDC",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDC,
+    pool: "0x8748e10925850891643f31beff1132e574260cd7",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "WMNT", tokenB: "USDT0",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT0,
+    pool: "0x373c05fbe686fa1f3abf5e37ac74c4fac73d2e95",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "WETH", tokenB: "mETH",
+    tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.mETH,
+    pool: "0xd2ae16b4f4985db367330052b6551387da584f6f",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "WETH",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.WETH,
+    pool: "0xd6ecefcd6f94073a7837af5c791e2180b6e66b90",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "mETH",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.mETH,
+    pool: "0xeebc5e596d6c788bcaa5324f44a8f648b746e041",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDT0", tokenB: "WETH",
+    tokenAAddress: TOKENS.USDT0, tokenBAddress: TOKENS.WETH,
+    pool: "0xa7c728c4be834ddaf5c49ee4ced678d8aff49de6",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDT0", tokenB: "mETH",
+    tokenAAddress: TOKENS.USDT0, tokenBAddress: TOKENS.mETH,
+    pool: "0x9756d5b60fe70ba41cd4d01fe04779f556c4b75d",
+    feeTier: 3000
+  },
+
   // ---- xStocks RWA pairs (USDC / xToken, fee_tier 3000 = 0.3%) ----
   {
     provider: "fluxion",
