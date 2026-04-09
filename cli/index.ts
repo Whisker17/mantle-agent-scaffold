@@ -9,6 +9,9 @@ import { registerRegistry } from "./commands/registry.js";
 import { registerAccount } from "./commands/account.js";
 import { registerToken } from "./commands/token.js";
 import { registerDefi } from "./commands/defi.js";
+import { registerSwap } from "./commands/defi-swap.js";
+import { registerAave } from "./commands/defi-aave.js";
+import { registerLp } from "./commands/defi-lp.js";
 import { registerIndexer } from "./commands/indexer.js";
 import { registerDiagnostics } from "./commands/diagnostics.js";
 
@@ -16,7 +19,7 @@ const program = new Command();
 
 program
   .name("mantle-cli")
-  .description("CLI for Mantle L2 chain reads, token operations, and DeFi queries")
+  .description("CLI for Mantle L2 chain reads, DeFi queries, swaps, LP, and Aave operations")
   .version("0.1.0")
   .option("-n, --network <network>", "target network (mainnet, sepolia)", "mainnet")
   .option("--json", "output raw JSON", false)
@@ -35,6 +38,9 @@ registerRegistry(program);
 registerAccount(program);
 registerToken(program);
 registerDefi(program);
+registerSwap(program);
+registerAave(program);
+registerLp(program);
 registerIndexer(program);
 registerDiagnostics(program);
 

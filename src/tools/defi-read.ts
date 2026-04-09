@@ -681,8 +681,8 @@ const defaultPoolDeps: PoolLiquidityDeps = {
       return null;
     }
 
-    const token0 = resolveTokenInputFromRegistry(token0Address, network);
-    const token1 = resolveTokenInputFromRegistry(token1Address, network);
+    const token0 = await resolveTokenInputFromRegistry(token0Address, network);
+    const token1 = await resolveTokenInputFromRegistry(token1Address, network);
 
     return {
       token_0: {
