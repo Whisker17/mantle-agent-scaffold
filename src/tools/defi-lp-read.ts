@@ -872,6 +872,192 @@ export async function suggestTickRange(
 }
 
 // =========================================================================
+// Tool 5: mantle_findPools
+// =========================================================================
+
+/**
+ * Common V3 fee tiers to scan (in hundredths of bip).
+ * 100=0.01%, 500=0.05%, 3000=0.3%, 10000=1%
+ */
+const V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
+
+/**
+ * Common LB bin steps to scan.
+ * 1=stablecoins, 2, 5=LSTs, 10, 15, 20=volatile, 25
+ */
+const LB_BIN_STEPS = [1, 2, 5, 10, 15, 20, 25] as const;
+
+const POOL_LIQUIDITY_ABI = [
+  {
+    type: "function" as const,
+    name: "liquidity" as const,
+    stateMutability: "view" as const,
+    inputs: [],
+    outputs: [{ name: "", type: "uint128" as const }]
+  }
+] as const;
+
+interface FoundPool {
+  provider: string;
+  pool_address: string;
+  fee_tier?: number;
+  bin_step?: number;
+  liquidity_raw: string;
+  has_liquidity: boolean;
+}
+
+async function findPools(
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const { network } = normalizeNetwork(args);
+  const client = getPublicClient(network);
+
+  const tokenAInput = requireString(args.token_a, "token_a");
+  const tokenBInput = requireString(args.token_b, "token_b");
+  const tokenA = await resolveTokenInfo(tokenAInput, network);
+  const tokenB = await resolveTokenInfo(tokenBInput, network);
+  const addrA = tokenA.address as `0x${string}`;
+  const addrB = tokenB.address as `0x${string}`;
+
+  const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+  const pools: FoundPool[] = [];
+
+  // --- V3 DEXes: Agni + Fluxion ---
+  for (const provider of ["agni", "fluxion"] as const) {
+    let factoryAddress: `0x${string}`;
+    try {
+      factoryAddress = getContractAddress(provider, "factory", network);
+    } catch {
+      continue; // factory not configured for this provider
+    }
+
+    const factoryCalls = V3_FEE_TIERS.map((fee) => ({
+      address: factoryAddress,
+      abi: V3_FACTORY_ABI,
+      functionName: "getPool" as const,
+      args: [addrA, addrB, fee] as const
+    }));
+
+    const factoryResults = await client.multicall({ contracts: factoryCalls });
+
+    // For pools that exist, read liquidity
+    const liquidityCalls: Array<{
+      fee: number;
+      poolAddress: `0x${string}`;
+    }> = [];
+
+    for (let i = 0; i < V3_FEE_TIERS.length; i++) {
+      const result = factoryResults[i];
+      if (result.status === "success" && result.result && result.result !== ZERO_ADDR) {
+        liquidityCalls.push({
+          fee: V3_FEE_TIERS[i],
+          poolAddress: result.result as `0x${string}`
+        });
+      }
+    }
+
+    if (liquidityCalls.length > 0) {
+      const liqResults = await client.multicall({
+        contracts: liquidityCalls.map((c) => ({
+          address: c.poolAddress,
+          abi: POOL_LIQUIDITY_ABI,
+          functionName: "liquidity" as const
+        }))
+      });
+
+      for (let i = 0; i < liquidityCalls.length; i++) {
+        const liqResult = liqResults[i];
+        const liquidity = liqResult.status === "success" ? (liqResult.result as bigint) : 0n;
+        pools.push({
+          provider,
+          pool_address: liquidityCalls[i].poolAddress,
+          fee_tier: liquidityCalls[i].fee,
+          liquidity_raw: liquidity.toString(),
+          has_liquidity: liquidity > 0n
+        });
+      }
+    }
+  }
+
+  // --- Merchant Moe LB ---
+  let moeFactory: `0x${string}`;
+  try {
+    moeFactory = getContractAddress("merchant_moe", "lb_factory_v2_2", network);
+  } catch {
+    moeFactory = "0x0000000000000000000000000000000000000000" as `0x${string}`;
+  }
+
+  if (moeFactory !== ZERO_ADDR) {
+    const moeCalls = LB_BIN_STEPS.map((bs) => ({
+      address: moeFactory,
+      abi: LB_FACTORY_ABI,
+      functionName: "getLBPairInformation" as const,
+      args: [addrA, addrB, BigInt(bs)] as const
+    }));
+
+    const moeResults = await client.multicall({ contracts: moeCalls });
+
+    for (let i = 0; i < LB_BIN_STEPS.length; i++) {
+      const result = moeResults[i];
+      if (result.status === "success" && result.result) {
+        const info = result.result as { binStep: number; LBPair: string; createdByOwner: boolean; ignoredForRouting: boolean };
+        if (info.LBPair && info.LBPair !== ZERO_ADDR) {
+          // Read active bin to confirm the pair is live
+          let hasLiquidity = false;
+          try {
+            const activeId = await client.readContract({
+              address: info.LBPair as `0x${string}`,
+              abi: LB_PAIR_ABI,
+              functionName: "getActiveId"
+            });
+            hasLiquidity = typeof activeId === "number" && activeId > 0;
+          } catch {
+            hasLiquidity = false;
+          }
+
+          pools.push({
+            provider: "merchant_moe",
+            pool_address: info.LBPair,
+            bin_step: LB_BIN_STEPS[i],
+            liquidity_raw: "0", // LB pairs don't have a single liquidity number
+            has_liquidity: hasLiquidity
+          });
+        }
+      }
+    }
+  }
+
+  // Sort: pools with liquidity first, then by provider
+  pools.sort((a, b) => {
+    if (a.has_liquidity && !b.has_liquidity) return -1;
+    if (!a.has_liquidity && b.has_liquidity) return 1;
+    return a.provider.localeCompare(b.provider);
+  });
+
+  return {
+    token_a: {
+      address: tokenA.address,
+      symbol: tokenA.symbol,
+      decimals: tokenA.decimals
+    },
+    token_b: {
+      address: tokenB.address,
+      symbol: tokenB.symbol,
+      decimals: tokenB.decimals
+    },
+    pools,
+    total_found: pools.length,
+    with_liquidity: pools.filter((p) => p.has_liquidity).length,
+    scanned: {
+      v3_providers: ["agni", "fluxion"],
+      v3_fee_tiers: [...V3_FEE_TIERS],
+      lb_bin_steps: [...LB_BIN_STEPS]
+    },
+    queried_at_utc: nowUtc()
+  };
+}
+
+// =========================================================================
 // Exported tool record
 // =========================================================================
 
@@ -1026,5 +1212,30 @@ export const defiLpReadTools: Record<string, Tool> = {
       required: []
     },
     handler: suggestTickRange
+  },
+
+  mantle_findPools: {
+    name: "mantle_findPools",
+    description:
+      "Discover all available liquidity pools for a token pair across ALL Mantle DEXes (Agni, Fluxion, Merchant Moe) by querying factory contracts on-chain. Returns every pool with its fee tier/bin step and whether it has liquidity.\n\nThis is the authoritative pool discovery tool — it queries factory contracts directly, not external indexers. Use it BEFORE adding LP to find the best pool.\n\nScans:\n- Agni & Fluxion: fee tiers 100 (0.01%), 500 (0.05%), 3000 (0.3%), 10000 (1%)\n- Merchant Moe: bin steps 1, 2, 5, 10, 15, 20, 25\n\nExamples:\n- Find USDC/USDe pools: token_a='USDC', token_b='USDe'\n- Find WMNT/USDC pools: token_a='WMNT', token_b='USDC'",
+    inputSchema: {
+      type: "object",
+      properties: {
+        token_a: {
+          type: "string",
+          description: "First token symbol or address."
+        },
+        token_b: {
+          type: "string",
+          description: "Second token symbol or address."
+        },
+        network: {
+          type: "string",
+          description: "Network: 'mainnet' (default) or 'sepolia'."
+        }
+      },
+      required: ["token_a", "token_b"]
+    },
+    handler: findPools
   }
 };

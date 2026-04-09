@@ -335,6 +335,68 @@ export function registerLp(parent: Command): void {
         ]);
       }
     });
+
+  // ── find-pools ──────────────────────────────────────────────────────
+  group
+    .command("find-pools")
+    .description(
+      "Discover all available pools for a token pair across Agni, Fluxion, and Merchant Moe. " +
+      "Queries factory contracts on-chain — the authoritative source."
+    )
+    .requiredOption("--token-a <token>", "first token symbol or address")
+    .requiredOption("--token-b <token>", "second token symbol or address")
+    .action(async (opts: Record<string, unknown>, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const result = await allTools["mantle_findPools"].handler({
+        token_a: opts.tokenA,
+        token_b: opts.tokenB,
+        network: globals.network
+      });
+      if (globals.json) {
+        formatJson(result);
+      } else {
+        const data = result as Record<string, unknown>;
+        const tokenA = data.token_a as Record<string, unknown>;
+        const tokenB = data.token_b as Record<string, unknown>;
+        console.log(
+          `\n  ${tokenA.symbol}/${tokenB.symbol} — ` +
+          `${data.with_liquidity} pools with liquidity (${data.total_found} total)\n`
+        );
+        const pools = (data.pools ?? []) as Record<string, unknown>[];
+        formatTable(pools, [
+          { key: "provider", label: "DEX" },
+          {
+            key: "fee_tier",
+            label: "Fee Tier",
+            align: "right",
+            format: (v) => v != null ? `${Number(v) / 10000}%` : "-"
+          },
+          {
+            key: "bin_step",
+            label: "Bin Step",
+            align: "right",
+            format: (v) => v != null ? String(v) : "-"
+          },
+          { key: "pool_address", label: "Pool Address" },
+          {
+            key: "has_liquidity",
+            label: "Liquid",
+            format: (v) => v === true ? "YES" : "NO"
+          },
+          {
+            key: "liquidity_raw",
+            label: "Liquidity",
+            align: "right",
+            format: (v) => {
+              const n = BigInt(v as string);
+              if (n === 0n) return "-";
+              if (n > 10n ** 18n) return (Number(n / (10n ** 12n)) / 1e6).toFixed(1) + "T";
+              return n.toString();
+            }
+          }
+        ]);
+      }
+    });
 }
 
 // ---------------------------------------------------------------------------
