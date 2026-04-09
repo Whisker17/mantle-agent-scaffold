@@ -47,7 +47,7 @@ export type DexPair = MoePair | V3Pair;
 // Token address constants (Mantle mainnet)
 // ---------------------------------------------------------------------------
 
-const TOKENS = {
+export const TOKENS = {
   WMNT: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
   USDC: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
   USDT0: "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
@@ -57,7 +57,8 @@ const TOKENS = {
   cmETH: "0xE6829d9a7eE3040e1276Fa75293Bde931859e8C0",
   FBTC: "0xC96dE26018A54D51c097160568752c4E3BD6C364",
   sUSDe: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
-  MOE: "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9"
+  MOE: "0x4515A45337F461A11Ff0FE8aBF3c606AE5dC00c9",
+  USDT: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE"
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -164,22 +165,97 @@ const AGNI_PAIRS: V3Pair[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Fluxion V3 pairs (limited data — recently launched Dec 2025)
+// xStocks RWA token addresses (Fluxion, all paired with USDC)
+// Source: mantle-xyz/fluxion-mm-monitor-tools configs/pools.yaml
+// ---------------------------------------------------------------------------
+
+export const XSTOCKS = {
+  wTSLAx: "0x43680abf18cf54898be84c6ef78237cfbd441883",
+  wAAPLx: "0x5aa7649fdbda47de64a07ac81d64b682af9c0724",
+  wCRCLx: "0xa90872aca656ebe47bdebf3b19ec9dd9c5adc7f8",
+  wSPYx: "0xc88fcd8b874fdb3256e8b55b3decb8c24eab4c02",
+  wHOODx: "0x953707d7a1cb30cc5c636bda8eaebe410341eb14",
+  wMSTRx: "0x266e5923f6118f8b340ca5a23ae7f71897361476",
+  wNVDAx: "0x93e62845c1dd5822ebc807ab71a5fb750decd15a",
+  wGOOGLx: "0x1630f08370917e79df0b7572395a5e907508bbbc",
+  wMETAx: "0x4e41a262caa93c6575d336e0a4eb79f3c67caa06",
+  wQQQx: "0xdbd9232fee15351068fe02f0683146e16d9f2cea"
+} as const;
+
+// ---------------------------------------------------------------------------
+// Fluxion V3 pairs — xStocks RWA pools (all USDC-paired, fee 3000)
 // ---------------------------------------------------------------------------
 
 const FLUXION_PAIRS: V3Pair[] = [
+  // ---- xStocks RWA pairs (USDC / xToken, fee_tier 3000 = 0.3%) ----
   {
     provider: "fluxion",
-    tokenA: "WMNT", tokenB: "USDC",
-    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDC,
-    pool: "0x0000000000000000000000000000000000000000", // TODO: verify on-chain
-    feeTier: 3000 // 0.3% — default V3 tier
+    tokenA: "USDC", tokenB: "wTSLAx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wTSLAx,
+    pool: "0x5e7935d70b5d14b6cf36fbde59944533fab96b3c",
+    feeTier: 3000
   },
   {
     provider: "fluxion",
-    tokenA: "WMNT", tokenB: "USDT0",
-    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT0,
-    pool: "0x0000000000000000000000000000000000000000", // TODO: verify on-chain
+    tokenA: "USDC", tokenB: "wAAPLx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wAAPLx,
+    pool: "0x2cc6a607f3445d826b9e29f507b3a2e3b9dae106",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wCRCLx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wCRCLx,
+    pool: "0x43cf441f5949d52faa105060239543492193c87e",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wSPYx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wSPYx,
+    pool: "0x373f7a2b95f28f38500eb70652e12038cca3bab8",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wHOODx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wHOODx,
+    pool: "0x4e23bb828e51cbc03c81d76c844228cc75f6a287",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wMSTRx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wMSTRx,
+    pool: "0x0e1f84a9e388071e20df101b36c14c817bf81953",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wNVDAx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wNVDAx,
+    pool: "0xa875ac23d106394d1baaae5bc42b951268bc04e2",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wGOOGLx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wGOOGLx,
+    pool: "0x66960ed892daf022c5f282c5316c38cb6f0c1333",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wMETAx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wMETAx,
+    pool: "0x782bd3895a6ac561d0df11b02dd6f9e023f3a497",
+    feeTier: 3000
+  },
+  {
+    provider: "fluxion",
+    tokenA: "USDC", tokenB: "wQQQx",
+    tokenAAddress: TOKENS.USDC, tokenBAddress: XSTOCKS.wQQQx,
+    pool: "0x505258001e834251634029742fc73b5cab4fd67d",
     feeTier: 3000
   }
 ];
