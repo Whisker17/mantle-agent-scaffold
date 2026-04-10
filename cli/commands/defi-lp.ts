@@ -9,6 +9,7 @@ import { parseIntegerOption, parseNumberOption, parseJsonArray } from "../utils.
  *   lp remove        — Build unsigned remove-liquidity transaction
  *   lp positions     — List V3 LP positions for an owner
  *   lp pool-state    — Read V3 pool on-chain state (tick, price, liquidity)
+ *   lp analyze       — Deep pool analysis (APR, risk, investment projections)
  *   lp collect-fees  — Build unsigned fee collection transaction
  *   lp suggest-ticks — Suggest tick ranges for V3 LP
  */
@@ -22,13 +23,19 @@ export function registerLp(parent: Command): void {
     .command("add")
     .description(
       "Build unsigned add-liquidity transaction. " +
-      "V3 (agni/fluxion) mints an NFT position; Merchant Moe LB adds to bins."
+      "V3 (agni/fluxion) mints an NFT position; Merchant Moe LB adds to bins.\n" +
+      "Amount modes: provide --amount-a + --amount-b, OR --amount-usd for automatic sizing."
     )
     .requiredOption("--provider <provider>", "DEX provider: agni, fluxion, or merchant_moe")
     .requiredOption("--token-a <token>", "first token symbol or address")
     .requiredOption("--token-b <token>", "second token symbol or address")
-    .requiredOption("--amount-a <amount>", "decimal amount of token A")
-    .requiredOption("--amount-b <amount>", "decimal amount of token B")
+    .option("--amount-a <amount>", "decimal amount of token A (required unless --amount-usd is used)")
+    .option("--amount-b <amount>", "decimal amount of token B (required unless --amount-usd is used)")
+    .option(
+      "--amount-usd <usd>",
+      "USD amount to invest (auto-splits between tokens using live prices and pool state)",
+      (v: string) => parseNumberOption(v, "--amount-usd")
+    )
     .requiredOption("--recipient <address>", "address to receive LP position")
     .option(
       "--slippage-bps <bps>",
@@ -70,12 +77,20 @@ export function registerLp(parent: Command): void {
     .option("--distribution-y <json>", "token Y distribution per bin as JSON array. For merchant_moe")
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
+      const hasTokenAmounts = opts.amountA != null && opts.amountB != null;
+      const hasUsdAmount = opts.amountUsd != null;
+      if (!hasTokenAmounts && !hasUsdAmount) {
+        throw new Error(
+          "Provide either (--amount-a + --amount-b) or --amount-usd."
+        );
+      }
       const result = await allTools["mantle_buildAddLiquidity"].handler({
         provider: opts.provider,
         token_a: opts.tokenA,
         token_b: opts.tokenB,
-        amount_a: String(opts.amountA),
-        amount_b: String(opts.amountB),
+        amount_a: opts.amountA != null ? String(opts.amountA) : undefined,
+        amount_b: opts.amountB != null ? String(opts.amountB) : undefined,
+        amount_usd: opts.amountUsd,
         recipient: opts.recipient,
         slippage_bps: opts.slippageBps,
         fee_tier: opts.feeTier,
@@ -105,12 +120,18 @@ export function registerLp(parent: Command): void {
     .command("remove")
     .description(
       "Build unsigned remove-liquidity transaction. " +
-      "V3 uses decreaseLiquidity+collect; Merchant Moe LB removes from bins."
+      "V3 uses decreaseLiquidity+collect; Merchant Moe LB removes from bins.\n" +
+      "V3 amount modes: --liquidity (exact) or --percentage (1-100, reads position on-chain)."
     )
     .requiredOption("--provider <provider>", "DEX provider: agni, fluxion, or merchant_moe")
     .requiredOption("--recipient <address>", "address to receive withdrawn tokens")
     .option("--token-id <id>", "V3 NFT position token ID. For agni/fluxion")
-    .option("--liquidity <amount>", "amount of liquidity to remove. For agni/fluxion")
+    .option("--liquidity <amount>", "exact amount of liquidity to remove. For agni/fluxion")
+    .option(
+      "--percentage <pct>",
+      "percentage of position to remove (1-100). For agni/fluxion. Reads liquidity on-chain.",
+      (v: string) => parseNumberOption(v, "--percentage")
+    )
     .option("--token-a <token>", "first token symbol or address. For merchant_moe")
     .option("--token-b <token>", "second token symbol or address. For merchant_moe")
     .option(
@@ -124,23 +145,30 @@ export function registerLp(parent: Command): void {
       const globals = cmd.optsWithGlobals();
       const provider = String(opts.provider).toLowerCase();
 
-      // V3 providers require --token-id and --liquidity
+      // V3 providers require --token-id and either --liquidity or --percentage
       if (provider === "agni" || provider === "fluxion") {
         if (!opts.tokenId) {
           throw new Error("--token-id is required for V3 providers (agni/fluxion).");
         }
-        if (!opts.liquidity) {
+        if (!opts.liquidity && opts.percentage == null) {
           throw new Error(
-            "--liquidity is required for V3 providers (agni/fluxion). " +
-            "Provide the amount of liquidity to remove (must be > 0)."
+            "--liquidity or --percentage is required for V3 providers (agni/fluxion). " +
+            "Use --percentage 100 to remove the full position."
           );
         }
-        const liq = BigInt(opts.liquidity as string);
-        if (liq <= 0n) {
+        if (opts.liquidity && opts.percentage != null) {
           throw new Error(
-            "--liquidity must be a positive value. " +
-            "A zero-liquidity removal would produce a no-op or fee-collect-only transaction."
+            "--liquidity and --percentage are mutually exclusive. Use one or the other."
           );
+        }
+        if (opts.liquidity) {
+          const liq = BigInt(opts.liquidity as string);
+          if (liq <= 0n) {
+            throw new Error(
+              "--liquidity must be a positive value. " +
+              "A zero-liquidity removal would produce a no-op or fee-collect-only transaction."
+            );
+          }
         }
       }
 
@@ -149,6 +177,7 @@ export function registerLp(parent: Command): void {
         recipient: opts.recipient,
         token_id: opts.tokenId,
         liquidity: opts.liquidity,
+        percentage: opts.percentage,
         token_a: opts.tokenA,
         token_b: opts.tokenB,
         bin_step: opts.binStep,
@@ -395,6 +424,114 @@ export function registerLp(parent: Command): void {
             }
           }
         ]);
+      }
+    });
+
+  // ── analyze ─────────────────────────────────────────────────────────
+  group
+    .command("analyze")
+    .description(
+      "Deep pool analysis: fee APR, multi-range comparison, risk scoring, investment projections. " +
+      "Fetches 24h volume and TVL from DexScreener to compute concentrated APR across 10 range brackets."
+    )
+    .option("--pool <address>", "pool contract address (or use --token-a/--token-b/--fee-tier)")
+    .option("--token-a <token>", "first token symbol or address")
+    .option("--token-b <token>", "second token symbol or address")
+    .option(
+      "--fee-tier <tier>",
+      "V3 fee tier",
+      (v: string) => parseNumberOption(v, "--fee-tier")
+    )
+    .option("--provider <provider>", "DEX provider: agni or fluxion", "agni")
+    .option(
+      "--investment-usd <amount>",
+      "USD amount to project returns for (default: 1000)",
+      (v: string) => parseNumberOption(v, "--investment-usd")
+    )
+    .action(async (opts: Record<string, unknown>, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const result = await allTools["mantle_analyzePool"].handler({
+        pool_address: opts.pool,
+        token_a: opts.tokenA,
+        token_b: opts.tokenB,
+        fee_tier: opts.feeTier,
+        provider: opts.provider,
+        investment_usd: opts.investmentUsd,
+        network: globals.network
+      });
+      if (globals.json) {
+        formatJson(result);
+      } else {
+        const data = result as Record<string, unknown>;
+        const market = data.market_data as Record<string, unknown>;
+        const risk = data.risk as Record<string, unknown>;
+
+        formatKeyValue(
+          {
+            pool: data.pool_address,
+            provider: data.provider,
+            fee: `${(data.fee_rate_pct as number).toFixed(2)}%`,
+            tvl: market.tvl_usd != null ? `$${Number(market.tvl_usd).toLocaleString()}` : "N/A",
+            volume_24h: market.volume_24h_usd != null ? `$${Number(market.volume_24h_usd).toLocaleString()}` : "N/A",
+            base_fee_apr: market.base_fee_apr_pct != null ? `${market.base_fee_apr_pct}%` : "N/A",
+            price_change_24h: market.price_change_24h_pct != null ? `${market.price_change_24h_pct}%` : "N/A",
+            risk_overall: risk.overall,
+            recommended_range: data.recommended_range ?? "N/A"
+          },
+          {
+            labels: {
+              pool: "Pool",
+              provider: "Provider",
+              fee: "Fee Rate",
+              tvl: "TVL",
+              volume_24h: "24h Volume",
+              base_fee_apr: "Base Fee APR",
+              price_change_24h: "24h Price Change",
+              risk_overall: "Risk Level",
+              recommended_range: "Recommended Range"
+            }
+          }
+        );
+
+        const ranges = (data.ranges ?? []) as Record<string, unknown>[];
+        console.log("\n  Range Analysis:");
+        formatTable(ranges, [
+          { key: "label", label: "Range" },
+          {
+            key: "fee_apr_pct",
+            label: "Fee APR",
+            align: "right",
+            format: (v) => `${v}%`
+          },
+          {
+            key: "concentration_factor",
+            label: "Conc. Factor",
+            align: "right",
+            format: (v) => `${v}x`
+          },
+          {
+            key: "daily_fee_usd",
+            label: "Daily Fee",
+            align: "right",
+            format: (v) => v != null ? `$${v}` : "N/A"
+          },
+          {
+            key: "monthly_fee_usd",
+            label: "Monthly Fee",
+            align: "right",
+            format: (v) => v != null ? `$${v}` : "N/A"
+          },
+          { key: "rebalance_risk", label: "Rebal. Risk" }
+        ]);
+
+        const riskDetails = (risk.details ?? []) as string[];
+        if (riskDetails.length > 0) {
+          console.log("\n  Risk Details:");
+          for (const d of riskDetails) {
+            console.log(`    - ${d}`);
+          }
+          console.log();
+        }
       }
     });
 }

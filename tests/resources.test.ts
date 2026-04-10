@@ -9,6 +9,7 @@ describe("resources", () => {
       "mantle://chain/sepolia",
       "mantle://docs/network-basics",
       "mantle://docs/risk-checklist",
+      "mantle://registry/capabilities",
       "mantle://registry/contracts",
       "mantle://registry/protocols",
       "mantle://registry/tokens"

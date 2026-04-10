@@ -872,7 +872,354 @@ export async function suggestTickRange(
 }
 
 // =========================================================================
-// Tool 5: mantle_findPools
+// Tool 5: mantle_analyzePool
+// =========================================================================
+
+const DEXSCREENER_API_BASE = "https://api.dexscreener.com";
+
+async function fetchJsonSafe(url: string, timeoutMs = 8000): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function resolveDexScreenerChain(network: Network): string | null {
+  return network === "mainnet" ? "mantle" : null;
+}
+
+interface DexScreenerPairData {
+  pairAddress?: string;
+  baseToken?: { address?: string; symbol?: string };
+  quoteToken?: { address?: string; symbol?: string };
+  priceUsd?: string;
+  liquidity?: { usd?: number | string | null };
+  volume?: { h24?: number | string | null };
+  priceChange?: { h24?: number | string | null; h6?: number | string | null };
+  fdv?: number | null;
+}
+
+async function fetchDexScreenerPoolData(
+  network: Network,
+  poolAddress: string
+): Promise<DexScreenerPairData | null> {
+  const chainId = resolveDexScreenerChain(network);
+  if (!chainId) return null;
+
+  const payload = await fetchJsonSafe(
+    `${DEXSCREENER_API_BASE}/latest/dex/pairs/${chainId}/${poolAddress}`
+  );
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.pairs)) {
+    return null;
+  }
+  const pairs = payload.pairs as DexScreenerPairData[];
+  return (
+    pairs.find(
+      (p) =>
+        p.pairAddress &&
+        p.pairAddress.toLowerCase() === poolAddress.toLowerCase()
+    ) ??
+    pairs[0] ??
+    null
+  );
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+interface RangeAnalysis {
+  label: string;
+  range_pct: number;
+  tick_lower: number;
+  tick_upper: number;
+  price_lower: number;
+  price_upper: number;
+  concentration_factor: number;
+  fee_apr_pct: number;
+  total_apr_pct: number;
+  daily_fee_usd: number | null;
+  weekly_fee_usd: number | null;
+  monthly_fee_usd: number | null;
+  rebalance_risk: "low" | "medium" | "high";
+}
+
+interface RiskAssessment {
+  overall: "low" | "medium" | "high";
+  tvl_risk: "low" | "medium" | "high";
+  volatility_risk: "low" | "medium" | "high";
+  concentration_risk: "low" | "medium" | "high";
+  details: string[];
+}
+
+export async function analyzePool(
+  args: Record<string, unknown>
+): Promise<unknown> {
+  // Read pool state
+  const poolState = (await getV3PoolState(args)) as {
+    pool_address: string;
+    provider: string;
+    token0: TokenInfo;
+    token1: TokenInfo;
+    sqrt_price_x96: string;
+    current_tick: number;
+    tick_spacing: number;
+    fee: number;
+    pool_liquidity: string;
+    price_token0_per_token1: number;
+    price_token1_per_token0: number;
+    queried_at_utc: string;
+  };
+
+  const { network } = normalizeNetwork(args);
+  const investmentUsd = typeof args.investment_usd === "number" ? args.investment_usd : 1000;
+
+  const currentTick = poolState.current_tick;
+  const tickSpacing = poolState.tick_spacing;
+  const decimals0 = poolState.token0.decimals ?? 18;
+  const decimals1 = poolState.token1.decimals ?? 18;
+  const feeRate = poolState.fee / 1_000_000; // e.g. 3000 → 0.003
+
+  // Fetch pool market data from DexScreener
+  const pairData = await fetchDexScreenerPoolData(network, poolState.pool_address);
+
+  const liquidityUsd = asFiniteNumber(pairData?.liquidity?.usd) ?? null;
+  const volume24hUsd = asFiniteNumber(pairData?.volume?.h24) ?? null;
+  const priceChange24h = asFiniteNumber(pairData?.priceChange?.h24) ?? null;
+  const priceChange6h = asFiniteNumber(pairData?.priceChange?.h6) ?? null;
+
+  // Base fee APR = (24h volume × fee rate × 365) / TVL
+  const baseFeeApr =
+    volume24hUsd != null && liquidityUsd != null && liquidityUsd > 0
+      ? (volume24hUsd * feeRate * 365) / liquidityUsd
+      : null;
+
+  // Define range brackets (percentage around current price)
+  const RANGE_BRACKETS = [
+    { label: "±1%", pct: 1 },
+    { label: "±2%", pct: 2 },
+    { label: "±3%", pct: 3 },
+    { label: "±5%", pct: 5 },
+    { label: "±8%", pct: 8 },
+    { label: "±10%", pct: 10 },
+    { label: "±15%", pct: 15 },
+    { label: "±20%", pct: 20 },
+    { label: "±35%", pct: 35 },
+    { label: "±50%", pct: 50 }
+  ];
+
+  // Full range tick span (approximately MIN_TICK to MAX_TICK)
+  const FULL_RANGE_TICKS = 887220 * 2;
+
+  const ranges: RangeAnalysis[] = RANGE_BRACKETS.map((bracket) => {
+    // Convert percentage to tick offset
+    // price = 1.0001^tick, so for ±X%:
+    // tickOffset = log(1+X/100) / log(1.0001)
+    const tickOffsetUp = Math.floor(
+      Math.log(1 + bracket.pct / 100) / Math.log(1.0001)
+    );
+    const tickOffsetDown = Math.floor(
+      Math.log(1 - bracket.pct / 100) / Math.log(1.0001)
+    );
+
+    const rawLower = currentTick + tickOffsetDown;
+    const rawUpper = currentTick + tickOffsetUp;
+    const tickLower = snapTickFloor(rawLower, tickSpacing);
+    const tickUpper = snapTickCeil(rawUpper, tickSpacing);
+
+    const priceLower = priceFromTick(tickLower, decimals0, decimals1);
+    const priceUpper = priceFromTick(tickUpper, decimals0, decimals1);
+
+    const rangeTickSpan = tickUpper - tickLower;
+    const concentrationFactor =
+      rangeTickSpan > 0 ? FULL_RANGE_TICKS / rangeTickSpan : 1;
+
+    // Concentrated fee APR = baseFeeApr × concentrationFactor
+    const feeAprPct =
+      baseFeeApr != null ? baseFeeApr * 100 * concentrationFactor : 0;
+
+    // Total APR (fee only for now — no farming rewards)
+    const totalAprPct = feeAprPct;
+
+    // Investment projections
+    const dailyFee =
+      volume24hUsd != null && liquidityUsd != null && liquidityUsd > 0
+        ? (volume24hUsd * feeRate * concentrationFactor * investmentUsd) /
+          liquidityUsd
+        : null;
+    const weeklyFee = dailyFee != null ? dailyFee * 7 : null;
+    const monthlyFee = dailyFee != null ? dailyFee * 30 : null;
+
+    // Rebalance risk based on range width vs 24h volatility
+    let rebalanceRisk: "low" | "medium" | "high" = "low";
+    if (priceChange24h != null) {
+      const absChange = Math.abs(priceChange24h);
+      if (absChange > bracket.pct * 0.8) {
+        rebalanceRisk = "high";
+      } else if (absChange > bracket.pct * 0.4) {
+        rebalanceRisk = "medium";
+      }
+    }
+
+    return {
+      label: bracket.label,
+      range_pct: bracket.pct,
+      tick_lower: tickLower,
+      tick_upper: tickUpper,
+      price_lower: priceLower,
+      price_upper: priceUpper,
+      concentration_factor: Math.round(concentrationFactor * 100) / 100,
+      fee_apr_pct: Math.round(feeAprPct * 100) / 100,
+      total_apr_pct: Math.round(totalAprPct * 100) / 100,
+      daily_fee_usd: dailyFee != null ? Math.round(dailyFee * 100) / 100 : null,
+      weekly_fee_usd: weeklyFee != null ? Math.round(weeklyFee * 100) / 100 : null,
+      monthly_fee_usd: monthlyFee != null ? Math.round(monthlyFee * 100) / 100 : null,
+      rebalance_risk: rebalanceRisk
+    };
+  });
+
+  // Risk assessment
+  const riskDetails: string[] = [];
+  let tvlRisk: "low" | "medium" | "high" = "low";
+  if (liquidityUsd == null) {
+    tvlRisk = "high";
+    riskDetails.push("TVL data unavailable — cannot assess liquidity depth.");
+  } else if (liquidityUsd < 100_000) {
+    tvlRisk = "high";
+    riskDetails.push(
+      `Low TVL ($${liquidityUsd.toLocaleString()}) — high slippage and impermanent loss risk.`
+    );
+  } else if (liquidityUsd < 500_000) {
+    tvlRisk = "medium";
+    riskDetails.push(
+      `Moderate TVL ($${liquidityUsd.toLocaleString()}) — adequate for small to medium positions.`
+    );
+  } else {
+    riskDetails.push(
+      `Healthy TVL ($${liquidityUsd.toLocaleString()}).`
+    );
+  }
+
+  let volatilityRisk: "low" | "medium" | "high" = "low";
+  if (priceChange24h != null) {
+    const absChange = Math.abs(priceChange24h);
+    if (absChange > 15) {
+      volatilityRisk = "high";
+      riskDetails.push(
+        `High 24h volatility (${priceChange24h > 0 ? "+" : ""}${priceChange24h.toFixed(1)}%) — frequent rebalancing needed for tight ranges.`
+      );
+    } else if (absChange > 5) {
+      volatilityRisk = "medium";
+      riskDetails.push(
+        `Moderate 24h volatility (${priceChange24h > 0 ? "+" : ""}${priceChange24h.toFixed(1)}%) — moderate ranges recommended.`
+      );
+    } else {
+      riskDetails.push(
+        `Low 24h volatility (${priceChange24h > 0 ? "+" : ""}${priceChange24h.toFixed(1)}%) — tight ranges feasible.`
+      );
+    }
+  } else {
+    volatilityRisk = "medium";
+    riskDetails.push("Price change data unavailable — volatility risk unknown.");
+  }
+
+  let concentrationRisk: "low" | "medium" | "high" = "low";
+  const poolLiqBigInt = BigInt(poolState.pool_liquidity);
+  if (poolLiqBigInt === 0n) {
+    concentrationRisk = "high";
+    riskDetails.push("Pool has zero liquidity — may be inactive or newly created.");
+  }
+
+  const riskScores = { low: 0, medium: 1, high: 2 } as const;
+  const maxRisk = Math.max(
+    riskScores[tvlRisk],
+    riskScores[volatilityRisk],
+    riskScores[concentrationRisk]
+  );
+  const overallRisk: "low" | "medium" | "high" =
+    maxRisk >= 2 ? "high" : maxRisk === 1 ? "medium" : "low";
+
+  const risk: RiskAssessment = {
+    overall: overallRisk,
+    tvl_risk: tvlRisk,
+    volatility_risk: volatilityRisk,
+    concentration_risk: concentrationRisk,
+    details: riskDetails
+  };
+
+  // Find recommended range
+  let recommendedRange: string | null = null;
+  if (priceChange24h != null) {
+    const absChange = Math.abs(priceChange24h);
+    // Recommend a range that is about 3x the daily volatility
+    const targetPct = Math.max(absChange * 3, 3);
+    const bestRange = ranges.reduce((prev, curr) =>
+      Math.abs(curr.range_pct - targetPct) < Math.abs(prev.range_pct - targetPct)
+        ? curr
+        : prev
+    );
+    recommendedRange = bestRange.label;
+  }
+
+  return {
+    pool_address: poolState.pool_address,
+    provider: poolState.provider,
+    token0: poolState.token0,
+    token1: poolState.token1,
+    fee: poolState.fee,
+    fee_rate_pct: feeRate * 100,
+    current_tick: currentTick,
+    tick_spacing: tickSpacing,
+    current_price_token1_per_token0: poolState.price_token1_per_token0,
+    current_price_token0_per_token1: poolState.price_token0_per_token1,
+
+    // Market data
+    market_data: {
+      tvl_usd: liquidityUsd,
+      volume_24h_usd: volume24hUsd,
+      price_change_24h_pct: priceChange24h,
+      price_change_6h_pct: priceChange6h,
+      base_fee_apr_pct:
+        baseFeeApr != null ? Math.round(baseFeeApr * 100 * 100) / 100 : null
+    },
+
+    // Multi-range analysis
+    ranges,
+    recommended_range: recommendedRange,
+
+    // Investment projection
+    investment: {
+      amount_usd: investmentUsd,
+      note: "Projections assume constant volume and price. Actual returns depend on price movement, rebalancing costs, and impermanent loss."
+    },
+
+    // Risk assessment
+    risk,
+
+    queried_at_utc: nowUtc()
+  };
+}
+
+// =========================================================================
+// Tool 6: mantle_findPools
 // =========================================================================
 
 /**
@@ -1065,7 +1412,7 @@ export const defiLpReadTools: Record<string, Tool> = {
   mantle_getV3PoolState: {
     name: "mantle_getV3PoolState",
     description:
-      "Read on-chain state of a Uniswap V3-compatible pool (Agni Finance or Fluxion) on Mantle. Returns sqrtPriceX96, current tick, tick spacing, liquidity, and human-readable prices.\n\nResolve by pool_address directly, or by (token_a + token_b + fee_tier + provider) to look up via the factory.\n\nExamples:\n- By address: pool_address='0xABC...'\n- By pair: token_a='WMNT', token_b='USDC', fee_tier=3000, provider='agni'",
+      "Read on-chain state of a Uniswap V3-compatible pool (Agni Finance or Fluxion) on Mantle. Returns sqrtPriceX96, current tick, tick spacing, liquidity, and human-readable prices.\n\nResolve by pool_address directly, or by (token_a + token_b + fee_tier + provider) to look up via the factory.\n\nExamples:\n- By address: pool_address='<pool_address>'\n- By pair: token_a='WMNT', token_b='USDC', fee_tier=3000, provider='agni'",
     inputSchema: {
       type: "object",
       properties: {
@@ -1107,7 +1454,7 @@ export const defiLpReadTools: Record<string, Tool> = {
   mantle_getLBPairState: {
     name: "mantle_getLBPairState",
     description:
-      "Read on-chain state of a Merchant Moe Liquidity Book pair on Mantle. Returns active bin ID, bin step, token metadata, active bin reserves, and reserves for +-5 nearby bins.\n\nResolve by pair_address directly, or by (token_a + token_b + bin_step) to look up via the LB Factory.\n\nExamples:\n- By address: pair_address='0xDEF...'\n- By pair: token_a='WMNT', token_b='USDC', bin_step=20",
+      "Read on-chain state of a Merchant Moe Liquidity Book pair on Mantle. Returns active bin ID, bin step, token metadata, active bin reserves, and reserves for +-5 nearby bins.\n\nResolve by pair_address directly, or by (token_a + token_b + bin_step) to look up via the LB Factory.\n\nExamples:\n- By address: pair_address='<pair_address>'\n- By pair: token_a='WMNT', token_b='USDC', bin_step=20",
     inputSchema: {
       type: "object",
       properties: {
@@ -1144,7 +1491,7 @@ export const defiLpReadTools: Record<string, Tool> = {
   mantle_getV3Positions: {
     name: "mantle_getV3Positions",
     description:
-      "Enumerate all V3 LP positions for a wallet across Agni Finance and Fluxion on Mantle. Returns token IDs, tick ranges, liquidity, uncollected fees, and whether each position is in-range.\n\nBy default filters out zero-liquidity, zero-fees positions (set include_empty=true to show all).\n\nExamples:\n- All positions: owner='0x1234...'\n- Agni only: owner='0x1234...', provider='agni'\n- Include empty: owner='0x1234...', include_empty=true",
+      "Enumerate all V3 LP positions for a wallet across Agni Finance and Fluxion on Mantle. Returns token IDs, tick ranges, liquidity, uncollected fees, and whether each position is in-range.\n\nBy default filters out zero-liquidity, zero-fees positions (set include_empty=true to show all).\n\nExamples:\n- All positions: owner='<wallet_address>'\n- Agni only: owner='<wallet_address>', provider='agni'\n- Include empty: owner='<wallet_address>', include_empty=true",
     inputSchema: {
       type: "object",
       properties: {
@@ -1175,7 +1522,7 @@ export const defiLpReadTools: Record<string, Tool> = {
   mantle_suggestTickRange: {
     name: "mantle_suggestTickRange",
     description:
-      "Suggest tick ranges for a V3 LP position on Mantle (Agni or Fluxion). Reads current pool state and generates three strategies (wide/moderate/tight) with tick bounds snapped to the pool's tick spacing grid and corresponding prices.\n\nAccepts the same inputs as mantle_getV3PoolState: pool_address OR (token_a + token_b + fee_tier + provider).\n\nExamples:\n- By address: pool_address='0xABC...'\n- By pair: token_a='WMNT', token_b='USDC', fee_tier=3000, provider='agni'",
+      "Suggest tick ranges for a V3 LP position on Mantle (Agni or Fluxion). Reads current pool state and generates three strategies (wide/moderate/tight) with tick bounds snapped to the pool's tick spacing grid and corresponding prices.\n\nAccepts the same inputs as mantle_getV3PoolState: pool_address OR (token_a + token_b + fee_tier + provider).\n\nExamples:\n- By address: pool_address='<pool_address>'\n- By pair: token_a='WMNT', token_b='USDC', fee_tier=3000, provider='agni'",
     inputSchema: {
       type: "object",
       properties: {
@@ -1212,6 +1559,63 @@ export const defiLpReadTools: Record<string, Tool> = {
       required: []
     },
     handler: suggestTickRange
+  },
+
+  mantle_analyzePool: {
+    name: "mantle_analyzePool",
+    description:
+      "[ANALYZE] Deep analysis of a V3 pool on Mantle (Agni or Fluxion). Returns:\n" +
+      "- Fee APR based on 24h volume / TVL\n" +
+      "- Multi-range APR comparison (10 brackets from ±1% to ±50%)\n" +
+      "- Risk assessment (TVL risk, volatility risk, concentration risk)\n" +
+      "- Investment return projections (daily/weekly/monthly fees for a given USD amount)\n" +
+      "- Recommended range based on recent volatility\n\n" +
+      "Accepts the same inputs as mantle_getV3PoolState: pool_address OR (token_a + token_b + fee_tier + provider).\n" +
+      "Optionally pass investment_usd (default: 1000) to see projected returns.\n\n" +
+      "Examples:\n" +
+      "- Analyze WMNT/USDC on Agni: token_a='WMNT', token_b='USDC', fee_tier=3000, provider='agni'\n" +
+      "- With investment amount: pool_address='<pool_address>', investment_usd=5000",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pool_address: {
+          type: "string",
+          description:
+            "V3 pool contract address. If provided, token_a/token_b/fee_tier/provider are optional."
+        },
+        token_a: {
+          type: "string",
+          description:
+            "First token symbol or address. Required if pool_address is not given."
+        },
+        token_b: {
+          type: "string",
+          description:
+            "Second token symbol or address. Required if pool_address is not given."
+        },
+        fee_tier: {
+          type: "number",
+          description:
+            "V3 fee tier (500, 3000, 10000). Required if pool_address is not given."
+        },
+        provider: {
+          type: "string",
+          description:
+            "DEX provider: 'agni' or 'fluxion'. Required if pool_address is not given."
+        },
+        investment_usd: {
+          type: "number",
+          description:
+            "USD amount to project returns for (default: 1000). Used to calculate daily/weekly/monthly fee income."
+        },
+        network: {
+          type: "string",
+          description: "Network: 'mainnet' (default) or 'sepolia'."
+        }
+      },
+      required: []
+    },
+    handler: analyzePool
   },
 
   mantle_findPools: {

@@ -29,6 +29,61 @@ import {
 } from "../config/protocols.js";
 import type { Tool, Network } from "../types.js";
 import { CHAIN_CONFIGS } from "../config/chains.js";
+
+// Price fetch helpers for USD-based amount mode
+const DEXSCREENER_API_BASE = "https://api.dexscreener.com";
+const DEFILLAMA_PRICES_API_BASE = "https://coins.llama.fi/prices/current";
+
+async function fetchJsonSafe(url: string, timeoutMs = 8000): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchTokenPriceUsd(
+  network: Network,
+  tokenAddress: string
+): Promise<number | null> {
+  if (network !== "mainnet") return null;
+
+  // Try DexScreener first
+  const dsPayload = await fetchJsonSafe(
+    `${DEXSCREENER_API_BASE}/tokens/v1/mantle/${tokenAddress}`
+  );
+  if (Array.isArray(dsPayload) && dsPayload.length > 0) {
+    const best =
+      dsPayload.find(
+        (p: any) =>
+          p.baseToken?.address?.toLowerCase() === tokenAddress.toLowerCase()
+      ) ?? dsPayload[0];
+    const price = typeof best?.priceUsd === "string" ? Number(best.priceUsd) : null;
+    if (price != null && Number.isFinite(price) && price > 0) return price;
+  }
+
+  // Fallback to DefiLlama
+  const llamaPayload = await fetchJsonSafe(
+    `${DEFILLAMA_PRICES_API_BASE}/mantle:${tokenAddress.toLowerCase()}`
+  );
+  if (llamaPayload?.coins) {
+    const key = `mantle:${tokenAddress.toLowerCase()}`;
+    const coin = llamaPayload.coins[key];
+    if (coin?.price && Number.isFinite(coin.price) && coin.price > 0) return coin.price;
+  }
+
+  return null;
+}
 import {
   findReserveBySymbol,
   findReserveByUnderlying,
@@ -1015,26 +1070,187 @@ export async function buildAddLiquidity(
   const tokenBInput = requireString(args.token_b, "token_b");
   const tokenA = await resolveToken(d, tokenAInput, network);
   const tokenB = await resolveToken(d, tokenBInput, network);
-  const amountARaw = requirePositiveAmount(
-    args.amount_a,
-    "amount_a",
-    tokenA.decimals
-  );
-  const amountBRaw = requirePositiveAmount(
-    args.amount_b,
-    "amount_b",
-    tokenB.decimals
-  );
   const recipient = requireAddress(args.recipient, "recipient");
   const deadline = d.deadline();
   const slippageBps =
     typeof args.slippage_bps === "number" ? args.slippage_bps : 50;
 
+  let amountARaw: bigint;
+  let amountBRaw: bigint;
+  const warnings: string[] = [];
+
+  // --- USD amount mode ---
+  if (args.amount_usd != null && args.amount_usd !== "") {
+    const usdAmount =
+      typeof args.amount_usd === "number"
+        ? args.amount_usd
+        : typeof args.amount_usd === "string"
+          ? Number(args.amount_usd)
+          : NaN;
+
+    if (!Number.isFinite(usdAmount) || usdAmount <= 0) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        "amount_usd must be a positive number.",
+        "Provide amount_usd as a positive decimal (e.g. 1000).",
+        { amount_usd: args.amount_usd }
+      );
+    }
+
+    // Fetch prices for both tokens
+    const [priceA, priceB] = await Promise.all([
+      fetchTokenPriceUsd(network, tokenA.address),
+      fetchTokenPriceUsd(network, tokenB.address)
+    ]);
+
+    if (priceA == null || priceB == null) {
+      throw new MantleMcpError(
+        "PRICE_UNAVAILABLE",
+        `Cannot fetch USD price for ${priceA == null ? tokenA.symbol : tokenB.symbol}. USD amount mode requires price data.`,
+        "Use amount_a and amount_b instead, or retry later.",
+        {
+          token_a: tokenA.symbol,
+          token_b: tokenB.symbol,
+          price_a: priceA,
+          price_b: priceB
+        }
+      );
+    }
+
+    // Compute pool-state-aware token ratio for V3 concentrated ranges.
+    // For V3, the required ratio of token0:token1 depends on the current
+    // price and the tick range. Full-range or Merchant Moe fall back to 50/50.
+    let ratioA = 0.5; // fraction of USD allocated to token A
+    let ratioMethod = "50/50 (default)";
+
+    if (provider === "agni" || provider === "fluxion") {
+      const tickLower = typeof args.tick_lower === "number" ? args.tick_lower : -887220;
+      const tickUpper = typeof args.tick_upper === "number" ? args.tick_upper : 887220;
+      const isFullRange = tickLower === -887220 && tickUpper === 887220;
+
+      if (!isFullRange) {
+        // Derive the ratio from V3 math:
+        // For a V3 position, the value split depends on sqrtPrice relative to
+        // the tick boundaries. We read the current pool price and compute
+        // the USD value fraction each token occupies.
+        try {
+          const client = d.getClient(network);
+
+          // Sort tokens the V3 way (token0 < token1)
+          const [t0, t1, p0, p1] =
+            tokenA.address.toLowerCase() < tokenB.address.toLowerCase()
+              ? [tokenA, tokenB, priceA, priceB]
+              : [tokenB, tokenA, priceB, priceA];
+
+          const feeTier = typeof args.fee_tier === "number" ? args.fee_tier : 3000;
+          const factoryAddress = getContractAddress(provider, "factory", network);
+          const poolAddr = await client.readContract({
+            address: factoryAddress as `0x${string}`,
+            abi: [{ type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "", type: "address" }, { name: "", type: "address" }, { name: "", type: "uint24" }], outputs: [{ name: "", type: "address" }] }] as const,
+            functionName: "getPool",
+            args: [t0.address as `0x${string}`, t1.address as `0x${string}`, feeTier]
+          }) as `0x${string}`;
+
+          if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
+            const slot0 = await client.readContract({
+              address: poolAddr,
+              abi: [{ type: "function", name: "slot0", stateMutability: "view", inputs: [], outputs: [{ name: "sqrtPriceX96", type: "uint160" }, { name: "tick", type: "int24" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint8" }, { name: "", type: "bool" }] }] as const,
+              functionName: "slot0"
+            }) as readonly [bigint, number, ...unknown[]];
+
+            const sqrtPriceX96 = slot0[0];
+            const sqrtP = Number(sqrtPriceX96) / 2 ** 96;
+
+            // sqrt prices at tick boundaries
+            const sqrtPLower = Math.sqrt(1.0001 ** tickLower);
+            const sqrtPUpper = Math.sqrt(1.0001 ** tickUpper);
+
+            // V3 token amounts for 1 unit of liquidity:
+            // amount0 = L * (1/sqrtP - 1/sqrtPUpper)  [when price is within range]
+            // amount1 = L * (sqrtP - sqrtPLower)
+            let amount0Frac: number;
+            let amount1Frac: number;
+
+            if (sqrtP <= sqrtPLower) {
+              // Below range: all token0
+              amount0Frac = 1;
+              amount1Frac = 0;
+            } else if (sqrtP >= sqrtPUpper) {
+              // Above range: all token1
+              amount0Frac = 0;
+              amount1Frac = 1;
+            } else {
+              // Within range
+              amount0Frac = (1 / sqrtP) - (1 / sqrtPUpper);
+              amount1Frac = sqrtP - sqrtPLower;
+            }
+
+            // Convert to USD fractions using token prices
+            const usd0 = amount0Frac * p0; // value of token0 portion
+            const usd1 = amount1Frac * p1; // value of token1 portion
+            const totalUsd = usd0 + usd1;
+
+            if (totalUsd > 0) {
+              // ratioA is the fraction going to tokenA (which may be token0 or token1)
+              const ratioT0 = usd0 / totalUsd;
+              ratioA = tokenA.address.toLowerCase() < tokenB.address.toLowerCase()
+                ? ratioT0
+                : 1 - ratioT0;
+              ratioMethod = `pool-state-aware (tick range [${tickLower}, ${tickUpper}])`;
+            }
+          }
+        } catch {
+          // Fall back to 50/50 if pool read fails
+          ratioMethod = "50/50 (pool read failed, fallback)";
+        }
+      }
+    }
+
+    const usdA = usdAmount * ratioA;
+    const usdB = usdAmount * (1 - ratioA);
+    const decimalA = usdA / priceA;
+    const decimalB = usdB / priceB;
+
+    amountARaw = parseUnits(decimalA.toFixed(tokenA.decimals), tokenA.decimals);
+    amountBRaw = parseUnits(decimalB.toFixed(tokenB.decimals), tokenB.decimals);
+
+    warnings.push(
+      `USD mode: $${usdAmount} split ${(ratioA * 100).toFixed(1)}/${((1 - ratioA) * 100).toFixed(1)} [${ratioMethod}] → ` +
+      `${formatUnits(amountARaw, tokenA.decimals)} ${tokenA.symbol} ($${usdA.toFixed(2)}) + ` +
+      `${formatUnits(amountBRaw, tokenB.decimals)} ${tokenB.symbol} ($${usdB.toFixed(2)}). ` +
+      `Prices: ${tokenA.symbol}=$${priceA.toFixed(4)}, ${tokenB.symbol}=$${priceB.toFixed(4)}.`
+    );
+  } else {
+    // --- Standard token amount mode ---
+    // Validate that at least one amount mode is provided
+    if (
+      (args.amount_a == null || args.amount_a === "") &&
+      (args.amount_b == null || args.amount_b === "")
+    ) {
+      throw new MantleMcpError(
+        "INVALID_INPUT",
+        "Either (amount_a + amount_b) or amount_usd is required.",
+        "Provide token amounts directly with amount_a and amount_b, or use amount_usd for automatic USD-based sizing.",
+        { amount_a: args.amount_a ?? null, amount_b: args.amount_b ?? null, amount_usd: args.amount_usd ?? null }
+      );
+    }
+    amountARaw = requirePositiveAmount(
+      args.amount_a,
+      "amount_a",
+      tokenA.decimals
+    );
+    amountBRaw = requirePositiveAmount(
+      args.amount_b,
+      "amount_b",
+      tokenB.decimals
+    );
+  }
+
   const amountADecimal = formatUnits(amountARaw, tokenA.decimals);
   const amountBDecimal = formatUnits(amountBRaw, tokenB.decimals);
 
   if (provider === "agni" || provider === "fluxion") {
-    return buildV3AddLiquidity({
+    const result = buildV3AddLiquidity({
       provider,
       tokenA,
       tokenB,
@@ -1051,10 +1267,12 @@ export async function buildAddLiquidity(
       tickUpper: typeof args.tick_upper === "number" ? args.tick_upper : 887220,
       now: d.now()
     });
+    result.warnings.push(...warnings);
+    return result;
   }
 
   // merchant_moe LB
-  return buildMoeAddLiquidity({
+  const result = buildMoeAddLiquidity({
     tokenA,
     tokenB,
     amountARaw,
@@ -1080,6 +1298,8 @@ export async function buildAddLiquidity(
       : [1e18],
     now: d.now()
   });
+  result.warnings.push(...warnings);
+  return result;
 }
 
 function buildV3AddLiquidity(params: {
@@ -1281,18 +1501,80 @@ export async function buildRemoveLiquidity(
   const deadline = d.deadline();
 
   if (provider === "agni" || provider === "fluxion") {
-    return buildV3RemoveLiquidity({
-      provider,
-      tokenId:
-        typeof args.token_id === "number"
-          ? BigInt(args.token_id)
-          : BigInt(requireString(args.token_id, "token_id")),
-      liquidity:
+    const tokenIdInput =
+      typeof args.token_id === "number"
+        ? BigInt(args.token_id)
+        : BigInt(requireString(args.token_id, "token_id"));
+
+    let liquidityToRemove: bigint;
+    const warnings: string[] = [];
+
+    // --- Percentage mode for V3 ---
+    if (args.percentage != null) {
+      const pct =
+        typeof args.percentage === "number"
+          ? args.percentage
+          : typeof args.percentage === "string"
+            ? Number(args.percentage)
+            : NaN;
+
+      if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+        throw new MantleMcpError(
+          "INVALID_INPUT",
+          "percentage must be between 0 (exclusive) and 100 (inclusive).",
+          "Provide percentage as a number 1-100 (e.g. 50 for half, 100 for full removal).",
+          { percentage: args.percentage }
+        );
+      }
+
+      // Read position to get current liquidity
+      const positionManager = getContractAddress(
+        provider,
+        "position_manager",
+        network
+      );
+      const client = d.getClient(network);
+      const positionResult = await client.readContract({
+        address: positionManager as `0x${string}`,
+        abi: V3_POSITION_MANAGER_ABI,
+        functionName: "positions",
+        args: [tokenIdInput]
+      });
+
+      const positionData = positionResult as readonly [
+        bigint, string, string, string, number, number, number,
+        bigint, bigint, bigint, bigint, bigint
+      ];
+      const totalLiquidity = positionData[7];
+
+      if (totalLiquidity === 0n) {
+        throw new MantleMcpError(
+          "INVALID_INPUT",
+          "Position has zero liquidity — nothing to remove.",
+          "Check position status with mantle_getV3Positions first.",
+          { token_id: tokenIdInput.toString(), provider }
+        );
+      }
+
+      liquidityToRemove = (totalLiquidity * BigInt(Math.round(pct * 100))) / 10000n;
+      if (liquidityToRemove === 0n) liquidityToRemove = 1n; // prevent zero removal
+
+      warnings.push(
+        `Percentage mode: removing ${pct}% of position liquidity (${liquidityToRemove.toString()} of ${totalLiquidity.toString()}).`
+      );
+    } else {
+      liquidityToRemove =
         typeof args.liquidity === "string"
           ? BigInt(args.liquidity)
           : typeof args.liquidity === "number"
             ? BigInt(args.liquidity)
-            : 0n,
+            : 0n;
+    }
+
+    const result = buildV3RemoveLiquidity({
+      provider,
+      tokenId: tokenIdInput,
+      liquidity: liquidityToRemove,
       amount0Min: 0n,
       amount1Min: 0n,
       recipient,
@@ -1300,6 +1582,8 @@ export async function buildRemoveLiquidity(
       network,
       now: d.now()
     });
+    result.warnings.push(...warnings);
+    return result;
   }
 
   // Merchant Moe
@@ -1971,7 +2255,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildAddLiquidity: {
     name: "mantle_buildAddLiquidity",
     description:
-      "Build an unsigned add-liquidity transaction. For V3 DEXes (agni/fluxion) mints an NFT position. For Merchant Moe LB adds to bin-based pools.\n\nExamples:\n- Full-range LP on Agni: provider='agni', token_a='WMNT', token_b='USDC', amount_a='10', amount_b='8', recipient='0x...'\n- LB LP on Merchant Moe: provider='merchant_moe', token_a='WMNT', token_b='USDe', amount_a='5', amount_b='4', recipient='0x...'",
+      "Build an unsigned add-liquidity transaction. For V3 DEXes (agni/fluxion) mints an NFT position. For Merchant Moe LB adds to bin-based pools.\n\nAmount modes:\n- Token amounts: provide amount_a and amount_b directly\n- USD amount: provide amount_usd to auto-split 50/50 between tokens (fetches live prices)\n\nExamples:\n- Token mode: provider='agni', token_a='WMNT', token_b='USDC', amount_a='10', amount_b='8', recipient='0x...'\n- USD mode: provider='agni', token_a='WMNT', token_b='USDC', amount_usd=1000, recipient='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -1989,11 +2273,17 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         amount_a: {
           type: "string",
-          description: "Decimal amount of token_a."
+          description: "Decimal amount of token_a. Required unless amount_usd is provided."
         },
         amount_b: {
           type: "string",
-          description: "Decimal amount of token_b."
+          description: "Decimal amount of token_b. Required unless amount_usd is provided."
+        },
+        amount_usd: {
+          type: "number",
+          description:
+            "USD amount to invest (auto-splits 50/50 between tokens using live prices). " +
+            "Alternative to amount_a + amount_b. Example: 1000 for $1000."
         },
         recipient: {
           type: "string",
@@ -2048,8 +2338,6 @@ export const defiWriteTools: Record<string, Tool> = {
         "provider",
         "token_a",
         "token_b",
-        "amount_a",
-        "amount_b",
         "recipient"
       ]
     },
@@ -2059,7 +2347,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildRemoveLiquidity: {
     name: "mantle_buildRemoveLiquidity",
     description:
-      "Build an unsigned remove-liquidity transaction. For V3 DEXes uses decreaseLiquidity+collect via multicall. For Merchant Moe LB removes from specified bins.\n\nExamples:\n- Remove V3 position on Agni: provider='agni', token_id='12345', liquidity='1000000', recipient='0x...'\n- Remove LB bins on Merchant Moe: provider='merchant_moe', token_a='WMNT', token_b='USDC', ids=[8388608], amounts=['1000000'], recipient='0x...'",
+      "Build an unsigned remove-liquidity transaction. For V3 DEXes uses decreaseLiquidity+collect via multicall. For Merchant Moe LB removes from specified bins.\n\nV3 amount modes:\n- Exact liquidity: provide 'liquidity' as a raw amount\n- Percentage: provide 'percentage' (1-100) to remove a portion of the position (reads current liquidity on-chain)\n\nExamples:\n- Remove 50% of V3 position: provider='agni', token_id='12345', percentage=50, recipient='0x...'\n- Remove all V3 position: provider='agni', token_id='12345', percentage=100, recipient='0x...'\n- Remove exact liquidity: provider='agni', token_id='12345', liquidity='1000000', recipient='0x...'\n- Remove LB bins on Merchant Moe: provider='merchant_moe', token_a='WMNT', token_b='USDC', ids=[8388608], amounts=['1000000'], recipient='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -2077,7 +2365,14 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         liquidity: {
           type: "string",
-          description: "Amount of liquidity to remove. For agni/fluxion."
+          description: "Exact amount of liquidity to remove. For agni/fluxion. Use 'percentage' for proportional removal."
+        },
+        percentage: {
+          type: "number",
+          description:
+            "Percentage of position liquidity to remove (1-100). For agni/fluxion. " +
+            "Reads current liquidity on-chain and calculates the amount. " +
+            "Example: 50 removes half, 100 removes all."
         },
         token_a: {
           type: "string",

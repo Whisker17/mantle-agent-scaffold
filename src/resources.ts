@@ -3,6 +3,7 @@ import { getRegistryData } from "./lib/registry.js";
 import { readSkillsReference } from "./lib/skills-path.js";
 import { MANTLE_TOKENS } from "./config/tokens.js";
 import { MANTLE_PROTOCOLS } from "./config/protocols.js";
+import { capabilityCatalog } from "./capability-catalog.js";
 import type { Resource } from "./types.js";
 
 const RESOURCES: Resource[] = [
@@ -47,6 +48,15 @@ const RESOURCES: Resource[] = [
     name: "Transaction Risk Checklist",
     description: "Pre-execution risk checklist from mantle-risk-evaluator references.",
     mimeType: "text/markdown"
+  },
+  {
+    uri: "mantle://registry/capabilities",
+    name: "Mantle Tool Capability Catalog",
+    description:
+      "Structured catalog of all MCP tools with semantic classification (query/analyze/execute), " +
+      "read/write nature, wallet requirements, and usage examples. " +
+      "Use this to quickly find the right tool for a task.",
+    mimeType: "application/json"
   }
 ];
 
@@ -101,6 +111,13 @@ export function readResource(uri: string): { content: string; mimeType: string }
     return {
       content: readSkillsReference("skills/mantle-risk-evaluator/references/risk-checklist.md"),
       mimeType: "text/markdown"
+    };
+  }
+
+  if (uri === "mantle://registry/capabilities") {
+    return {
+      content: JSON.stringify(capabilityCatalog(), null, 2),
+      mimeType: "application/json"
     };
   }
 
