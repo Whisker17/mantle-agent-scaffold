@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -13,9 +14,13 @@ import { getPromptMessages, prompts } from "./prompts.js";
 import { listResources, prefetchResources, readResource } from "./resources.js";
 import { allTools } from "./tools/index.js";
 
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+);
+
 export function createServer(): Server {
   const server = new Server(
-    { name: "mantle-mcp", version: "0.1.0" },
+    { name: "mantle-mcp", version: pkg.version },
     {
       capabilities: {
         tools: {},
