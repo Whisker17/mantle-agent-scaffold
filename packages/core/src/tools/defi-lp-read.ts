@@ -1230,10 +1230,10 @@ export async function analyzePool(
 const V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
 
 /**
- * Common LB bin steps to scan.
- * 1=stablecoins, 2, 5=LSTs, 10, 15, 20=volatile, 25
+ * LB bin steps to scan on-chain. Covers all values known to exist on
+ * Mantle mainnet as of 2026-04. Must stay in sync with actual deployments.
  */
-const LB_BIN_STEPS = [1, 2, 5, 10, 15, 20, 25] as const;
+const LB_BIN_STEPS = [1, 2, 5, 10, 15, 20, 25, 50, 75, 100] as const;
 
 const POOL_LIQUIDITY_ABI = [
   {
@@ -1705,7 +1705,7 @@ export const defiLpReadTools: Record<string, Tool> = {
   mantle_getLBPairState: {
     name: "mantle_getLBPairState",
     description:
-      "Read on-chain state of a Merchant Moe Liquidity Book pair on Mantle. Returns active bin ID, bin step, token metadata, active bin reserves, and reserves for +-5 nearby bins.\n\nResolve by pair_address directly, or by (token_a + token_b + bin_step) to look up via the LB Factory.\n\nExamples:\n- By address: pair_address='<pair_address>'\n- By pair: token_a='WMNT', token_b='USDC', bin_step=20",
+      "Read on-chain state of a Merchant Moe Liquidity Book pair on Mantle. Returns active bin ID, bin step, token metadata, active bin reserves, and reserves for +-5 nearby bins.\n\nResolve by pair_address directly, or by (token_a + token_b + bin_step) to look up via the LB Factory.\n\nExamples:\n- By address: pair_address='<pair_address>'\n- By pair: token_a='WMNT', token_b='USDC', bin_step=25",
     inputSchema: {
       type: "object",
       properties: {

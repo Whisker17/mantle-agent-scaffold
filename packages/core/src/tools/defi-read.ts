@@ -7,6 +7,9 @@ import { resolveTokenInput as resolveTokenInputFromRegistry } from "../lib/token
 import type { ResolvedTokenInput } from "../lib/token-registry.js";
 import type { Tool } from "../types.js";
 import { AAVE_V3_POOL_ABI } from "../lib/abis/aave-v3-pool.js";
+import { V3_QUOTER_V2_ABI } from "../lib/abis/uniswap-v3.js";
+import { LB_QUOTER_ABI } from "../lib/abis/merchant-moe-lb.js";
+import { discoverBestV3Pool } from "../lib/pool-discovery.js";
 
 interface SwapQuoteDeps {
   resolveTokenInput: (
@@ -26,6 +29,14 @@ interface SwapQuoteDeps {
     price_impact_pct: number | null;
     route: string;
     fee_tier: number | null;
+    /** Actual data source: "onchain" or "dexscreener". Used for source_trace. */
+    quote_source?: "onchain" | "dexscreener";
+    resolved_pool_params?: {
+      fee_tier?: number;
+      bin_step?: number;
+      pool_address?: string;
+      route_path?: string[];
+    };
   } | null>;
   now: () => string;
 }
@@ -644,37 +655,328 @@ async function fetchDefiLlamaTokenPrices(
   return out;
 }
 
-const defaultSwapDeps: SwapQuoteDeps = {
-  resolveTokenInput: (token, network) => resolveTokenInputFromRegistry(token, network ?? "mainnet"),
-  quoteProvider: async ({ provider, tokenIn, tokenOut, amountInRaw, network, feeTier }) => {
-    const pairs = await fetchDexScreenerTokenPairs(network, tokenIn.address);
-    const pair = pickBestDexPairForRoute(
-      pairs,
+// ---------------------------------------------------------------------------
+// On-chain quoter helpers
+// ---------------------------------------------------------------------------
+
+function getProtocolAddress(
+  protocol: string,
+  contractKey: string,
+  network: "mainnet" | "sepolia"
+): `0x${string}` | null {
+  const proto = MANTLE_PROTOCOLS[network]?.[protocol];
+  if (!proto) return null;
+  const addr = proto.contracts[contractKey];
+  if (!addr || addr.startsWith("BLOCKER")) return null;
+  return addr as `0x${string}`;
+}
+
+/**
+ * On-chain V3 quote via QuoterV2 contract.
+ * Uses the same pool discovery as buildSwap to ensure consistency.
+ */
+async function onChainV3Quote(
+  provider: "agni" | "fluxion",
+  tokenIn: ResolvedTokenInput,
+  tokenOut: ResolvedTokenInput,
+  amountInRaw: bigint,
+  network: "mainnet" | "sepolia",
+  explicitFeeTier: number | null
+): Promise<{
+  estimated_out_raw: string;
+  estimated_out_decimal: string;
+  price_impact_pct: number | null;
+  route: string;
+  fee_tier: number | null;
+  quote_source: "onchain";
+  resolved_pool_params: {
+    fee_tier: number;
+    pool_address: string;
+  };
+} | null> {
+  const client = getPublicClient(network);
+  const factoryAddr = getProtocolAddress(provider, "factory", network);
+  const quoterAddr = getProtocolAddress(provider, "quoter_v2", network);
+  if (!factoryAddr || !quoterAddr) return null;
+
+  let selectedFeeTier: number;
+  let selectedPoolAddress: string;
+
+  if (explicitFeeTier != null) {
+    // Caller specified a fee tier — use it directly, just verify pool exists
+    const { V3_FACTORY_ABI } = await import("../lib/abis/uniswap-v3.js");
+    try {
+      const poolAddr = await client.readContract({
+        address: factoryAddr,
+        abi: V3_FACTORY_ABI,
+        functionName: "getPool",
+        args: [
+          tokenIn.address as `0x${string}`,
+          tokenOut.address as `0x${string}`,
+          explicitFeeTier
+        ]
+      }) as string;
+      if (!poolAddr || poolAddr === "0x0000000000000000000000000000000000000000") {
+        return null; // explicit fee tier has no pool
+      }
+      selectedFeeTier = explicitFeeTier;
+      selectedPoolAddress = poolAddr;
+    } catch {
+      return null;
+    }
+  } else {
+    // Auto-discover best pool by liquidity
+    const bestPool = await discoverBestV3Pool(
+      client,
+      factoryAddr,
+      tokenIn.address as `0x${string}`,
+      tokenOut.address as `0x${string}`
+    );
+    if (!bestPool) return null;
+    selectedFeeTier = bestPool.feeTier;
+    selectedPoolAddress = bestPool.poolAddress;
+  }
+
+  // Call QuoterV2.quoteExactInputSingle via simulate (staticcall)
+  try {
+    const { result } = await client.simulateContract({
+      address: quoterAddr,
+      abi: V3_QUOTER_V2_ABI,
+      functionName: "quoteExactInputSingle",
+      args: [{
+        tokenIn: tokenIn.address as `0x${string}`,
+        tokenOut: tokenOut.address as `0x${string}`,
+        amountIn: amountInRaw,
+        fee: selectedFeeTier,
+        sqrtPriceLimitX96: 0n
+      }]
+    });
+
+    const amountOut = result[0];
+    if (amountOut <= 0n) return null;
+
+    return {
+      estimated_out_raw: amountOut.toString(),
+      estimated_out_decimal: formatUnits(amountOut, tokenOut.decimals ?? 18),
+      price_impact_pct: null,
+      route: `onchain:${provider}:${selectedPoolAddress}`,
+      fee_tier: selectedFeeTier,
+      quote_source: "onchain" as const,
+      resolved_pool_params: {
+        fee_tier: selectedFeeTier,
+        pool_address: selectedPoolAddress
+      }
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Common bridge token addresses for multi-hop route exploration on Moe.
+ * The LB Quoter needs explicit intermediate tokens — it does NOT auto-discover them.
+ */
+const MOE_BRIDGE_TOKEN_ADDRESSES: Record<string, string> = {
+  WMNT: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
+  USDC: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
+  USDT0: "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+  USDe: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+  WETH: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111"
+};
+
+interface MoeQuoteCandidate {
+  amountOut: bigint;
+  routePath: string[];
+  pairs: string[];
+  binSteps: number[];
+  versions: number[];
+}
+
+/**
+ * On-chain Merchant Moe LB quote via LB Quoter contract.
+ * Tries direct path first, then all 2-hop paths via bridge tokens.
+ */
+async function onChainMoeQuote(
+  tokenIn: ResolvedTokenInput,
+  tokenOut: ResolvedTokenInput,
+  amountInRaw: bigint,
+  network: "mainnet" | "sepolia"
+): Promise<{
+  estimated_out_raw: string;
+  estimated_out_decimal: string;
+  price_impact_pct: number | null;
+  route: string;
+  fee_tier: number | null;
+  quote_source: "onchain";
+  resolved_pool_params: {
+    bin_step?: number;
+    route_path: string[];
+  };
+} | null> {
+  const client = getPublicClient(network);
+  const quoterAddr = getProtocolAddress("merchant_moe", "lb_quoter_v2_2", network);
+  if (!quoterAddr) return null;
+
+  const inAddr = tokenIn.address as `0x${string}`;
+  const outAddr = tokenOut.address as `0x${string}`;
+
+  // Build candidate routes: direct + all 2-hop via bridge tokens
+  const routes: `0x${string}`[][] = [
+    [inAddr, outAddr] // direct
+  ];
+
+  for (const [, bridgeAddr] of Object.entries(MOE_BRIDGE_TOKEN_ADDRESSES)) {
+    const bridge = bridgeAddr as `0x${string}`;
+    if (bridge.toLowerCase() === inAddr.toLowerCase()) continue;
+    if (bridge.toLowerCase() === outAddr.toLowerCase()) continue;
+    routes.push([inAddr, bridge, outAddr]);
+  }
+
+  // Query all routes in parallel
+  const results = await Promise.allSettled(
+    routes.map((route) =>
+      client.readContract({
+        address: quoterAddr,
+        abi: LB_QUOTER_ABI,
+        functionName: "findBestPathFromAmountIn",
+        args: [route, amountInRaw]
+      })
+    )
+  );
+
+  // Find the route with the highest output
+  let best: MoeQuoteCandidate | null = null;
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status !== "fulfilled") continue;
+
+    const quote = result.value as {
+      route: readonly string[];
+      pairs: readonly string[];
+      binSteps: readonly bigint[];
+      versions: readonly bigint[];
+      amounts: readonly bigint[];
+      virtualAmountsWithoutSlippage: readonly bigint[];
+      fees: readonly bigint[];
+    };
+
+    const amounts = quote.amounts;
+    if (!amounts || amounts.length === 0) continue;
+    const amountOut = amounts[amounts.length - 1];
+    if (amountOut <= 0n) continue;
+
+    if (best === null || amountOut > best.amountOut) {
+      best = {
+        amountOut,
+        routePath: Array.from(quote.route).map(String),
+        pairs: Array.from(quote.pairs).map(String),
+        binSteps: Array.from(quote.binSteps).map(Number),
+        versions: Array.from(quote.versions).map(Number)
+      };
+    }
+  }
+
+  if (!best) return null;
+
+  return {
+    estimated_out_raw: best.amountOut.toString(),
+    estimated_out_decimal: formatUnits(best.amountOut, tokenOut.decimals ?? 18),
+    price_impact_pct: null,
+    route: `onchain:merchant_moe:${best.pairs.join(",")}`,
+    fee_tier: null,
+    quote_source: "onchain" as const,
+    resolved_pool_params: {
+      bin_step: best.binSteps.length === 1 ? best.binSteps[0] : undefined,
+      route_path: best.routePath
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DexScreener fallback quoter (previous implementation)
+// ---------------------------------------------------------------------------
+
+async function dexScreenerQuote(
+  provider: "agni" | "merchant_moe" | "fluxion",
+  tokenIn: ResolvedTokenInput,
+  tokenOut: ResolvedTokenInput,
+  amountInRaw: bigint,
+  network: "mainnet" | "sepolia",
+  feeTier: number | null
+): Promise<{
+  estimated_out_raw: string;
+  estimated_out_decimal: string;
+  price_impact_pct: number | null;
+  route: string;
+  fee_tier: number | null;
+  quote_source: "dexscreener";
+} | null> {
+  // DexScreener returns at most ~30 pairs per token. If the target pair
+  // has low liquidity relative to other pairs of the input token, it may
+  // not appear in the results. Fall back to querying by tokenOut address.
+  let pairs = await fetchDexScreenerTokenPairs(network, tokenIn.address);
+  let pair = pickBestDexPairForRoute(
+    pairs,
+    provider,
+    tokenIn.address,
+    tokenOut.address
+  );
+  if (!pair) {
+    const outPairs = await fetchDexScreenerTokenPairs(network, tokenOut.address);
+    pair = pickBestDexPairForRoute(
+      outPairs,
       provider,
       tokenIn.address,
       tokenOut.address
     );
-    if (!pair) {
-      return null;
+  }
+  if (!pair) {
+    return null;
+  }
+
+  const estimatedOutRaw = estimateSwapOutRawFromDexPair({
+    pair,
+    tokenIn,
+    tokenOut,
+    amountInRaw
+  });
+  if (estimatedOutRaw == null || estimatedOutRaw <= 0n) {
+    return null;
+  }
+
+  return {
+    estimated_out_raw: estimatedOutRaw.toString(),
+    estimated_out_decimal: formatUnits(estimatedOutRaw, tokenOut.decimals ?? 18),
+    price_impact_pct: null,
+    route: `dexscreener:${pair.dexId ?? "unknown"}:${pair.pairAddress ?? "unknown"}`,
+    fee_tier: feeTier,
+    quote_source: "dexscreener" as const
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Default swap dependencies
+// ---------------------------------------------------------------------------
+
+const defaultSwapDeps: SwapQuoteDeps = {
+  resolveTokenInput: (token, network) => resolveTokenInputFromRegistry(token, network ?? "mainnet"),
+  quoteProvider: async ({ provider, tokenIn, tokenOut, amountInRaw, network, feeTier }) => {
+    // Tier 1: On-chain quoter (uses same pool discovery as buildSwap)
+    try {
+      if (provider === "agni" || provider === "fluxion") {
+        const onChainResult = await onChainV3Quote(provider, tokenIn, tokenOut, amountInRaw, network, feeTier);
+        if (onChainResult) return onChainResult;
+      } else if (provider === "merchant_moe") {
+        const onChainResult = await onChainMoeQuote(tokenIn, tokenOut, amountInRaw, network);
+        if (onChainResult) return onChainResult;
+      }
+    } catch {
+      // On-chain quoter failed, fall through to DexScreener
     }
 
-    const estimatedOutRaw = estimateSwapOutRawFromDexPair({
-      pair,
-      tokenIn,
-      tokenOut,
-      amountInRaw
-    });
-    if (estimatedOutRaw == null || estimatedOutRaw <= 0n) {
-      return null;
-    }
-
-    return {
-      estimated_out_raw: estimatedOutRaw.toString(),
-      estimated_out_decimal: formatUnits(estimatedOutRaw, tokenOut.decimals ?? 18),
-      price_impact_pct: null,
-      route: `dexscreener:${pair.dexId ?? "unknown"}:${pair.pairAddress ?? "unknown"}`,
-      fee_tier: feeTier
-    };
+    // Tier 2: DexScreener fallback
+    return dexScreenerQuote(provider, tokenIn, tokenOut, amountInRaw, network, feeTier);
   },
   now: () => new Date().toISOString()
 };
@@ -1309,9 +1611,10 @@ export async function getSwapQuote(
       ["fluxion", fluxionResult]
     ] as const) {
       if (result.status === "fulfilled" && result.value) {
+        const src = result.value.quote_source ?? "dexscreener";
         sourceTrace.push({
-          source: `dexscreener:${label}`,
-          tier: 1,
+          source: `${src}:${label}`,
+          tier: src === "onchain" ? 1 : 2,
           status: "success"
         });
         candidates.push({
@@ -1325,14 +1628,14 @@ export async function getSwapQuote(
         });
       } else if (result.status === "fulfilled") {
         sourceTrace.push({
-          source: `dexscreener:${label}`,
+          source: `quote:${label}`,
           tier: 1,
           status: "empty",
           reason: "no route"
         });
       } else {
         sourceTrace.push({
-          source: `dexscreener:${label}`,
+          source: `quote:${label}`,
           tier: 1,
           status: "error",
           reason: result.reason instanceof Error ? result.reason.message : "quote provider failed"
@@ -1384,7 +1687,7 @@ export async function getSwapQuote(
 
     if (!quote) {
       sourceTrace.push({
-        source: `dexscreener:${selectedProvider}`,
+        source: `quote:${selectedProvider}`,
         tier: 1,
         status: "empty",
         reason: "no route"
@@ -1402,13 +1705,17 @@ export async function getSwapQuote(
       );
     }
 
+    const src = quote.quote_source ?? "dexscreener";
     sourceTrace.push({
-      source: `dexscreener:${selectedProvider}`,
-      tier: 1,
+      source: `${src}:${selectedProvider}`,
+      tier: src === "onchain" ? 1 : 2,
       status: "success"
     });
     successfulSources = 1;
   }
+
+  // Derive tierUsed from the actual quote source (not the initial default)
+  tierUsed = quote.quote_source === "dexscreener" ? 2 : 1;
 
   const routerAddress = resolveRouterAddress(selectedProvider, network);
   const estimatedOutRaw = selectedOutRaw ?? parseRawAmount(quote.estimated_out_raw, "estimated_out_raw", {
@@ -1458,6 +1765,7 @@ export async function getSwapQuote(
     route: quote.route,
     router_address: routerAddress,
     fee_tier: quote.fee_tier,
+    resolved_pool_params: quote.resolved_pool_params ?? null,
     quoted_at_utc: resolvedDeps.now(),
     source_trace: sourceTrace,
     confidence,

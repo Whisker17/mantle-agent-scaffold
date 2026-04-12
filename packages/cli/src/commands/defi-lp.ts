@@ -59,7 +59,7 @@ export function registerLp(parent: Command): void {
     )
     .option(
       "--bin-step <step>",
-      "LB bin step (default: 20). For merchant_moe",
+      "LB bin step (default: 25). For merchant_moe",
       (v: string) => parseIntegerOption(v, "--bin-step")
     )
     .option(

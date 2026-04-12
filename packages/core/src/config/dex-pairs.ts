@@ -81,61 +81,61 @@ const MOE_PAIRS: MoePair[] = [
     provider: "merchant_moe",
     tokenA: "USDC", tokenB: "USDT0",
     tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.USDT0,
-    pool: "0x48c1a89af1102cad358549e9bb16ae5f96cddfec",
+    pool: "0x368B148052A1A775Dbe70e56d04474e54c694CAC",
     binStep: 1, version: 2, routerVersion: 3
   },
   {
     provider: "merchant_moe",
     tokenA: "USDe", tokenB: "USDT0",
     tokenAAddress: TOKENS.USDe, tokenBAddress: TOKENS.USDT0,
-    pool: "0x7ccd8a769d466340fff36c6e10ffa8cf9077d988",
+    pool: "0x2093A6fd094124a55F180dceA5033c3BF481100e",
     binStep: 1, version: 2, routerVersion: 3
   },
   {
     provider: "merchant_moe",
     tokenA: "USDC", tokenB: "USDe",
     tokenAAddress: TOKENS.USDC, tokenBAddress: TOKENS.USDe,
-    pool: "0xd55639c3312467adafb347614806f1d30525c0c8",
+    pool: "0x7e78B65d0525339dF5F4aA22b82d9e97584Da8FC",
     binStep: 1, version: 2, routerVersion: 3
   },
 
-  // ---- WMNT pairs (V1 classic AMM pools — routerVersion defaults to 0) ----
+  // ---- WMNT pairs (bin_step=25, V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "WMNT", tokenB: "USDT0",
     tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDT0,
-    pool: "0xf6c9020c9e915808481757779edb53daceae2415",
-    binStep: 20, version: 2
+    pool: "0xC0729cDE19741dE280b230D650F0fDad2aD79D09",
+    binStep: 25, version: 2
   },
   {
     provider: "merchant_moe",
     tokenA: "WMNT", tokenB: "USDe",
     tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDe,
-    pool: "0x5d54d430d1fd9425976147318e6080479bffc16d",
-    binStep: 20, version: 2
+    pool: "0x5d54d430D1FD9425976147318E6080479bffC16D",
+    binStep: 25, version: 2
   },
   {
     provider: "merchant_moe",
     tokenA: "WMNT", tokenB: "USDC",
     tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDC,
-    pool: "0x8e3a13418743ab1a98434551937ea687e451b589",
-    binStep: 20, version: 2
+    pool: "0xa1C653c415Db1c00dfd04eE26E624f959A0eD52F",
+    binStep: 25, version: 2
   },
 
-  // ---- ETH derivative pairs (V1 classic AMM pools) ----
+  // ---- ETH derivative pairs (V2.2 pools) ----
   {
     provider: "merchant_moe",
     tokenA: "mETH", tokenB: "WETH",
     tokenAAddress: TOKENS.mETH, tokenBAddress: TOKENS.WETH,
-    pool: "0x86e3a987187fed135d6d9c114f1857d8144f01e1",
-    binStep: 5, version: 2
+    pool: "0x3b6c029E6409f2868769871F9Ed6825b15BDca15",
+    binStep: 2, version: 2
   },
   {
     provider: "merchant_moe",
     tokenA: "cmETH", tokenB: "mETH",
     tokenAAddress: TOKENS.cmETH, tokenBAddress: TOKENS.mETH,
-    pool: "0x3d887ce4988fb46aec6e0027171f65db3526e5f1",
-    binStep: 5, version: 2
+    pool: "0x3d887CE4988fb46AEC6E0027171f65DB3526E5f1",
+    binStep: 1, version: 2
   }
 ];
 

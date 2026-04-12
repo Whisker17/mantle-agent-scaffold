@@ -74,7 +74,7 @@ describe("defi read tools", () => {
       }
     );
 
-    expect(calls.sort()).toEqual(["agni", "merchant_moe"]);
+    expect(calls.sort()).toEqual(["agni", "fluxion", "merchant_moe"]);
     expect(result.provider).toBe("merchant_moe");
     expect(result.estimated_out_raw).toBe("101000000");
   });

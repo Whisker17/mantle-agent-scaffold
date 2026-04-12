@@ -8,7 +8,7 @@ export function registerDefi(parent: Command): void {
 
   group
     .command("swap-quote")
-    .description("Get swap quotes for Agni and Merchant Moe routes")
+    .description("Get swap quotes across Agni, Fluxion, and Merchant Moe (on-chain quoter primary, DexScreener fallback)")
     .requiredOption("--in <token>", "input token symbol or address")
     .requiredOption("--out <token>", "output token symbol or address")
     .requiredOption("--amount <amount>", "human-readable amount in")
@@ -32,6 +32,10 @@ export function registerDefi(parent: Command): void {
         const data = result as Record<string, unknown>;
         const tokenIn = data.token_in as Record<string, unknown>;
         const tokenOut = data.token_out as Record<string, unknown>;
+        const poolParams = data.resolved_pool_params as Record<string, unknown> | null;
+        const sourceTrace = (data.source_trace ?? []) as Record<string, unknown>[];
+        const primarySource = sourceTrace.find((t) => t.status === "success");
+
         formatKeyValue(
           {
             provider: data.provider,
@@ -39,10 +43,14 @@ export function registerDefi(parent: Command): void {
             token_out: `${tokenOut.symbol} (${tokenOut.address})`,
             amount_in: data.amount_in_decimal,
             estimated_out: data.estimated_out_decimal,
-            minimum_out: data.minimum_out_decimal,
+            minimum_out: `${data.minimum_out_decimal} (raw: ${data.minimum_out_raw})`,
             price_impact: data.price_impact_pct,
-            router: data.router_address,
+            fee_tier: poolParams?.fee_tier ?? data.fee_tier ?? "-",
+            bin_step: poolParams?.bin_step ?? "-",
+            pool_address: poolParams?.pool_address ?? "-",
             route: data.route,
+            router: data.router_address,
+            source: primarySource?.source ?? "unknown",
             quoted_at: data.quoted_at_utc
           },
           {
@@ -54,8 +62,12 @@ export function registerDefi(parent: Command): void {
               estimated_out: "Estimated Out",
               minimum_out: "Minimum Out (0.5% slip)",
               price_impact: "Price Impact %",
-              router: "Router Address",
+              fee_tier: "Fee Tier",
+              bin_step: "Bin Step",
+              pool_address: "Pool Address",
               route: "Route",
+              router: "Router Address",
+              source: "Quote Source",
               quoted_at: "Quoted At"
             }
           }

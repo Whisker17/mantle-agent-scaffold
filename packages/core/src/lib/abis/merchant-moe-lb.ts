@@ -336,3 +336,35 @@ export const LB_FACTORY_ABI = [
     ]
   }
 ] as const;
+
+// ---------------------------------------------------------------------------
+// LB Quoter V2.2 — on-chain swap quoting with automatic route discovery
+// LB Quoter V2.2: 0x501b8AFd35df20f531fF45F6f695793AC3316c85
+// ---------------------------------------------------------------------------
+
+export const LB_QUOTER_ABI = [
+  {
+    type: "function" as const,
+    name: "findBestPathFromAmountIn" as const,
+    stateMutability: "view" as const,
+    inputs: [
+      { name: "route", type: "address[]" as const },
+      { name: "amountIn", type: "uint128" as const }
+    ],
+    outputs: [
+      {
+        name: "quote",
+        type: "tuple" as const,
+        components: [
+          { name: "route", type: "address[]" as const },
+          { name: "pairs", type: "address[]" as const },
+          { name: "binSteps", type: "uint256[]" as const },
+          { name: "versions", type: "uint256[]" as const },
+          { name: "amounts", type: "uint128[]" as const },
+          { name: "virtualAmountsWithoutSlippage", type: "uint128[]" as const },
+          { name: "fees", type: "uint128[]" as const }
+        ]
+      }
+    ]
+  }
+] as const;

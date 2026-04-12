@@ -76,6 +76,18 @@ export const MANTLE_TOKENS: Record<Network, Record<string, TokenEntry>> = {
       name: "FBTC",
       symbol: "FBTC"
     },
+    syrupUSDT: {
+      address: "0x051665f2455116e929b9972c36d23070F5054Ce0",
+      decimals: 6,
+      name: "Syrup USDT",
+      symbol: "syrupUSDT"
+    },
+    wrsETH: {
+      address: "0x93e855643e940D025bE2e529272e4Dbd15a2Cf74",
+      decimals: 18,
+      name: "Wrapped rsETH",
+      symbol: "wrsETH"
+    },
     GHO: {
       address: "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73",
       decimals: 18,

@@ -38,8 +38,19 @@ export function registerSwap(parent: Command): void {
     )
     .option(
       "--bin-step <step>",
-      "LB bin step (1, 5, 20). Auto-resolved from known pairs",
+      "LB bin step (1, 2, 25). Auto-resolved from known pairs",
       (v: string) => parseIntegerOption(v, "--bin-step")
+    )
+    .option("--quote-provider <provider>", "Provider from a prior swap-quote (for cross-validation)")
+    .option(
+      "--quote-fee-tier <tier>",
+      "Fee tier from prior quote's resolved_pool_params (for cross-validation)",
+      (v: string) => parseIntegerOption(v, "--quote-fee-tier")
+    )
+    .option(
+      "--quote-bin-step <step>",
+      "Bin step from prior quote's resolved_pool_params (for cross-validation)",
+      (v: string) => parseIntegerOption(v, "--quote-bin-step")
     )
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const globals = cmd.optsWithGlobals();
@@ -53,6 +64,9 @@ export function registerSwap(parent: Command): void {
         slippage_bps: opts.slippageBps,
         fee_tier: opts.feeTier,
         bin_step: opts.binStep,
+        quote_provider: opts.quoteProvider,
+        quote_fee_tier: opts.quoteFeeTier,
+        quote_bin_step: opts.quoteBinStep,
         network: globals.network
       });
       if (globals.json) {
@@ -184,31 +198,37 @@ export function registerSwap(parent: Command): void {
 function formatUnsignedTxResult(data: Record<string, unknown>): void {
   const tx = data.unsigned_tx as Record<string, unknown> | undefined;
   const warnings = (data.warnings ?? []) as string[];
+  const poolParams = data.pool_params as Record<string, unknown> | undefined;
 
-  formatKeyValue(
-    {
-      intent: data.intent,
-      human_summary: data.human_summary,
-      tx_to: tx?.to,
-      tx_value: tx?.value,
-      tx_chainId: tx?.chainId,
-      tx_data: truncateHex(tx?.data as string | undefined),
-      tx_gas: tx?.gas ?? "auto",
-      built_at: data.built_at_utc
-    },
-    {
-      labels: {
-        intent: "Intent",
-        human_summary: "Summary",
-        tx_to: "To",
-        tx_value: "Value (hex)",
-        tx_chainId: "Chain ID",
-        tx_data: "Calldata",
-        tx_gas: "Gas Limit",
-        built_at: "Built At"
-      }
-    }
-  );
+  const fields: Record<string, unknown> = {
+    intent: data.intent,
+    human_summary: data.human_summary,
+    tx_to: tx?.to,
+    tx_value: tx?.value,
+    tx_chainId: tx?.chainId,
+    tx_data: truncateHex(tx?.data as string | undefined),
+    tx_gas: tx?.gas ?? "auto",
+    built_at: data.built_at_utc
+  };
+
+  const labels: Record<string, string> = {
+    intent: "Intent",
+    human_summary: "Summary",
+    tx_to: "To",
+    tx_value: "Value (hex)",
+    tx_chainId: "Chain ID",
+    tx_data: "Calldata",
+    tx_gas: "Gas Limit",
+    built_at: "Built At"
+  };
+
+  if (poolParams) {
+    if (poolParams.provider) { fields.pool_provider = poolParams.provider; labels.pool_provider = "Pool Provider"; }
+    if (poolParams.fee_tier != null) { fields.pool_fee_tier = poolParams.fee_tier; labels.pool_fee_tier = "Pool Fee Tier"; }
+    if (poolParams.bin_step != null) { fields.pool_bin_step = poolParams.bin_step; labels.pool_bin_step = "Pool Bin Step"; }
+  }
+
+  formatKeyValue(fields, { labels });
 
   if (warnings.length > 0) {
     console.log("  Warnings:");
