@@ -5,6 +5,7 @@ export interface ChainConfig {
   name: string;
   native_token: { symbol: string; decimals: number };
   rpc_url: string;
+  fallback_rpc_urls: string[];
   ws_url: string | null;
   explorer_url: string;
   bridge_url: string;
@@ -19,6 +20,10 @@ export const CHAIN_CONFIGS: Record<Network, ChainConfig> = {
     name: "Mantle",
     native_token: { symbol: "MNT", decimals: 18 },
     rpc_url: "https://rpc.mantle.xyz",
+    fallback_rpc_urls: [
+      "https://mantle-mainnet.public.blastapi.io",
+      "https://mantle.drpc.org",
+    ],
     ws_url: "wss://rpc.mantle.xyz",
     explorer_url: "https://mantlescan.xyz",
     bridge_url: "https://app.mantle.xyz/bridge",
@@ -30,6 +35,9 @@ export const CHAIN_CONFIGS: Record<Network, ChainConfig> = {
     name: "Mantle Sepolia",
     native_token: { symbol: "MNT", decimals: 18 },
     rpc_url: "https://rpc.sepolia.mantle.xyz",
+    fallback_rpc_urls: [
+      "https://mantle-sepolia.drpc.org",
+    ],
     ws_url: null,
     explorer_url: "https://sepolia.mantlescan.xyz",
     bridge_url: "https://app.mantle.xyz/bridge?network=sepolia",

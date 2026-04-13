@@ -8,6 +8,10 @@ import { findRegistryByAddress } from "../lib/registry.js";
 import type { ResolvedTokenInput } from "../lib/token-registry.js";
 import type { Tool } from "../types.js";
 
+type BatchResult =
+  | { status: "success"; balance: bigint }
+  | { status: "failure"; error: string };
+
 interface AccountDeps {
   getClient: (network: "mainnet" | "sepolia") => any;
   now: () => string;
@@ -20,6 +24,11 @@ interface AccountDeps {
     tokenAddress: string,
     owner: string
   ) => Promise<bigint>;
+  readTokenBalancesBatch: (
+    client: any,
+    tokenAddresses: string[],
+    owner: string
+  ) => Promise<BatchResult[]>;
   readTokenAllowance: (
     client: any,
     tokenAddress: string,
@@ -43,6 +52,27 @@ const defaultDeps: AccountDeps = {
       functionName: "balanceOf",
       args: [owner as `0x${string}`]
     })) as bigint;
+  },
+  readTokenBalancesBatch: async (client, tokenAddresses, owner) => {
+    if (!client.multicall) {
+      throw new Error("multicall not implemented on client");
+    }
+    const contracts = tokenAddresses.map((addr) => ({
+      address: addr as `0x${string}`,
+      abi: ERC20_ABI,
+      functionName: "balanceOf" as const,
+      args: [owner as `0x${string}`],
+    }));
+    const results = await client.multicall({ contracts });
+    return results.map((r: { status: string; result?: unknown; error?: any }) => {
+      if (r.status === "success") {
+        return { status: "success" as const, balance: r.result as bigint };
+      }
+      return {
+        status: "failure" as const,
+        error: r.error?.message ?? "multicall read failed",
+      };
+    });
   },
   readTokenAllowance: async (client, tokenAddress, owner, spender) => {
     if (!client.readContract) {
@@ -113,36 +143,79 @@ export async function getTokenBalances(
   const tokens = Array.isArray(args.tokens) ? args.tokens : [];
   const client = resolvedDeps.getClient(network);
   const blockNumber = await client.getBlockNumber();
-  const balances = await Promise.all(
+
+  // Phase 1: Resolve all token inputs in parallel
+  const resolutions = await Promise.all(
     tokens.map(async (rawToken) => {
       const token = String(rawToken);
       try {
         const resolved = await resolvedDeps.resolveTokenInput(token, network);
         if (resolved.address === "native") {
-          throw new Error("native token is not supported in token balance reads; use mantle_getBalance");
+          return { ok: false as const, token, error: "native token is not supported in token balance reads; use mantle_getBalance" };
         }
-        const balanceRaw = await resolvedDeps.readTokenBalance(client, resolved.address, address);
-        return {
-          token_address: resolved.address,
-          symbol: resolved.symbol,
-          decimals: resolved.decimals,
-          balance_raw: balanceRaw.toString(),
-          balance_normalized:
-            resolved.decimals == null ? null : formatUnits(balanceRaw, resolved.decimals),
-          error: null
-        };
+        return { ok: true as const, token, resolved };
       } catch (error) {
-        return {
-          token_address: null,
-          symbol: null,
-          decimals: null,
-          balance_raw: "0",
-          balance_normalized: null,
-          error: error instanceof Error ? error.message : String(error)
-        };
+        return { ok: false as const, token, error: error instanceof Error ? error.message : String(error) };
       }
     })
   );
+
+  // Phase 2: Batch multicall for all successfully-resolved tokens
+  const successfulResolutions = resolutions.filter(
+    (r): r is Extract<typeof r, { ok: true }> => r.ok
+  );
+  const tokenAddresses = successfulResolutions.map((r) => r.resolved.address);
+
+  let batchResults: BatchResult[] = [];
+  let batchError: string | null = null;
+  if (tokenAddresses.length > 0) {
+    try {
+      batchResults = await resolvedDeps.readTokenBalancesBatch(client, tokenAddresses, address);
+    } catch (error) {
+      batchError = error instanceof Error ? error.message : String(error);
+      batchResults = tokenAddresses.map(() => ({
+        status: "failure" as const,
+        error: batchError!,
+      }));
+    }
+  }
+
+  // Phase 3: Assemble results — map back from multicall to per-token output
+  let batchIdx = 0;
+  const balances = resolutions.map((resolution) => {
+    if (!resolution.ok) {
+      return {
+        token_address: null,
+        symbol: null,
+        decimals: null,
+        balance_raw: "0",
+        balance_normalized: null,
+        error: resolution.error,
+      };
+    }
+    const { resolved } = resolution;
+    const batchResult = batchResults[batchIdx++];
+    if (batchResult.status === "failure") {
+      return {
+        token_address: resolved.address,
+        symbol: resolved.symbol,
+        decimals: resolved.decimals,
+        balance_raw: "0",
+        balance_normalized: null,
+        error: batchResult.error,
+      };
+    }
+    return {
+      token_address: resolved.address,
+      symbol: resolved.symbol,
+      decimals: resolved.decimals,
+      balance_raw: batchResult.balance.toString(),
+      balance_normalized:
+        resolved.decimals == null ? null : formatUnits(batchResult.balance, resolved.decimals),
+      error: null,
+    };
+  });
+
   const partial = balances.some((entry) => entry.error !== null);
 
   return {
@@ -151,7 +224,7 @@ export async function getTokenBalances(
     balances,
     block_number: Number(blockNumber),
     collected_at_utc: resolvedDeps.now(),
-    partial
+    partial,
   };
 }
 
