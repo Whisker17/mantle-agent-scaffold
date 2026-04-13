@@ -63,4 +63,73 @@ export function registerChain(parent: Command): void {
         });
       }
     });
+
+  group
+    .command("tx")
+    .description("Fetch on-chain transaction receipt by hash")
+    .requiredOption("--hash <hash>", "transaction hash (0x-prefixed)")
+    .action(async (opts: Record<string, unknown>, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const result = await allTools["mantle_getTransactionReceipt"].handler({
+        hash: opts.hash,
+        network: globals.network
+      });
+      if (globals.json) {
+        formatJson(result);
+      } else {
+        const data = result as Record<string, unknown>;
+        formatKeyValue(data, {
+          order: [
+            "hash", "status", "block_number", "from", "to",
+            "value_mnt", "fee_mnt", "gas_used",
+            "effective_gas_price_gwei", "logs_count", "contract_address"
+          ],
+          labels: {
+            hash: "TX Hash",
+            status: "Status",
+            block_number: "Block",
+            from: "From",
+            to: "To",
+            value_mnt: "Value (MNT)",
+            fee_mnt: "Fee (MNT)",
+            gas_used: "Gas Used",
+            effective_gas_price_gwei: "Gas Price (Gwei)",
+            logs_count: "Event Logs",
+            contract_address: "Contract Created"
+          }
+        });
+      }
+    });
+
+  group
+    .command("estimate-gas")
+    .description("Estimate gas cost for an unsigned transaction")
+    .requiredOption("--to <address>", "target contract address from unsigned_tx")
+    .option("--from <address>", "sender address for context-aware estimation (recommended)")
+    .option("--data <hex>", "calldata from unsigned_tx (hex string)")
+    .option("--value <hex>", "value from unsigned_tx (hex string, default 0x0)")
+    .action(async (opts: Record<string, unknown>, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const result = await allTools["mantle_estimateGas"].handler({
+        to: opts.to,
+        from: opts.from,
+        data: opts.data,
+        value: opts.value,
+        network: globals.network
+      });
+      if (globals.json) {
+        formatJson(result);
+      } else {
+        const data = result as Record<string, unknown>;
+        formatKeyValue(data, {
+          order: ["gas_limit", "gas_price_gwei", "estimated_fee_mnt", "network"],
+          labels: {
+            gas_limit: "Gas Limit",
+            gas_price_gwei: "Gas Price (Gwei)",
+            estimated_fee_mnt: "Est. Fee (MNT)",
+            network: "Network"
+          }
+        });
+      }
+    });
 }

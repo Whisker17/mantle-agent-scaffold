@@ -76,6 +76,28 @@ const CAPABILITIES: CapabilityEntry[] = [
     example: "{ \"network\": \"mainnet\" }",
     tags: ["chain", "status", "gas", "block"]
   },
+  {
+    id: "mantle_getTransactionReceipt",
+    name: "Get Transaction Receipt",
+    category: "query",
+    mutates: false,
+    auth: "none",
+    summary: "Fetch on-chain transaction receipt: status, gas used, fee, value, from/to. Use to verify transaction results.",
+    cli_command: "mantle-cli chain tx --hash <tx_hash> --json",
+    example: "{ \"hash\": \"0xabc...def\" }",
+    tags: ["chain", "transaction", "receipt", "verify", "status"]
+  },
+  {
+    id: "mantle_estimateGas",
+    name: "Estimate Gas",
+    category: "query",
+    mutates: false,
+    auth: "none",
+    summary: "Estimate gas cost for an unsigned transaction. Provide sender address (from) for reliable DeFi estimates. Returns gas limit, gas price, and fee in MNT.",
+    cli_command: "mantle-cli chain estimate-gas --to <address> --from <sender> --data <hex> --value <hex> --json",
+    example: "{ \"to\": \"0x...\", \"data\": \"0x...\", \"value\": \"0x0\" }",
+    tags: ["chain", "gas", "estimate", "fee"]
+  },
 
   // ── Account ────────────────────────────────────────────────────────────
   {
@@ -324,6 +346,28 @@ const CAPABILITIES: CapabilityEntry[] = [
   },
 
   // ── DeFi Write (Transaction Builders) ──────────────────────────────────
+  {
+    id: "mantle_buildTransferNative",
+    name: "Build Transfer Native MNT",
+    category: "execute",
+    mutates: true,
+    auth: "none",
+    summary: "Build unsigned tx to transfer native MNT to a recipient. Handles wei conversion and hex encoding deterministically.",
+    cli_command: "mantle-cli transfer send-native --to <address> --amount <n> --json",
+    example: "{ \"to\": \"0x1234...\", \"amount\": \"15\" }",
+    tags: ["transfer", "send", "MNT", "native", "tx"]
+  },
+  {
+    id: "mantle_buildTransferToken",
+    name: "Build Transfer ERC-20 Token",
+    category: "execute",
+    mutates: true,
+    auth: "none",
+    summary: "Build unsigned tx to transfer an ERC-20 token to a recipient. Resolves token decimals and encodes transfer calldata deterministically.",
+    cli_command: "mantle-cli transfer send-token --token <token> --to <address> --amount <n> --json",
+    example: "{ \"token\": \"USDC\", \"to\": \"0x1234...\", \"amount\": \"100\" }",
+    tags: ["transfer", "send", "ERC-20", "token", "tx"]
+  },
   {
     id: "mantle_buildApprove",
     name: "Build Approve",

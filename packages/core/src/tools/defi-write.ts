@@ -122,6 +122,15 @@ const MAX_UINT256 = 2n ** 256n - 1n;
  */
 const BRIDGE_TOKENS = ["WMNT", "USDC", "USDT0", "USDT", "USDe", "WETH"] as const;
 
+/**
+ * xStocks RWA tokens — these ONLY have liquidity on Fluxion (USDC pairs).
+ * Using any other provider will fail with no pool found.
+ */
+const XSTOCKS_SYMBOLS = new Set([
+  "WTSLAX", "WAAPLX", "WCRCLX", "WSPYX", "WHOODX",
+  "WMSTRX", "WNVDAX", "WGOOGLX", "WMETAX", "WQQQX"
+]);
+
 /** Derive chain ID from network config instead of hardcoding. */
 function chainId(network: Network): number {
   return CHAIN_CONFIGS[network].chain_id;
@@ -186,6 +195,18 @@ function withDeps(overrides?: Partial<DefiWriteDeps>): DefiWriteDeps {
   return { ...defaultDeps, ...overrides };
 }
 
+/**
+ * Returns a warning string if the network is sepolia (testnet).
+ * Attach to warnings[] in write tools to alert users about testnet usage.
+ */
+function sepoliaWarning(network: Network): string | null {
+  if (network === "sepolia") {
+    return "TESTNET WARNING: You are building a transaction for Mantle Sepolia (testnet, chain_id=5003). " +
+      "This has no real value. For mainnet operations, omit --network or use --network mainnet.";
+  }
+  return null;
+}
+
 function requireAddress(input: unknown, fieldName: string): string {
   if (typeof input !== "string" || !isAddress(input, { strict: false })) {
     throw new MantleMcpError(
@@ -223,6 +244,21 @@ async function resolveToken(
   network: Network
 ): Promise<ResolvedToken> {
   const resolved = await d.resolveTokenInput(input, network);
+
+  // Reject native MNT — it has no ERC-20 contract, cannot be used in
+  // any DeFi tool that expects a contract address (swap, approve, LP, Aave).
+  if (resolved.address === "native") {
+    throw new MantleMcpError(
+      "NATIVE_TOKEN_NOT_SUPPORTED",
+      `MNT is the native gas token and has no ERC-20 contract address. ` +
+        `It cannot be used directly in swaps, approvals, or DeFi operations.`,
+      "Wrap MNT to WMNT first: mantle-cli swap wrap-mnt --amount <n> --json. " +
+        "Then use WMNT for swaps, LP, and Aave. " +
+        "To transfer native MNT, use: mantle-cli transfer send-native --to <addr> --amount <n> --json.",
+      { token: input, resolved_address: "native" }
+    );
+  }
+
   if (resolved.decimals == null) {
     throw new MantleMcpError(
       "TOKEN_NOT_FOUND",
@@ -516,6 +552,133 @@ export async function buildUnwrapMnt(
     },
     warnings: [],
     built_at_utc: d.now()
+  };
+}
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+// =========================================================================
+// Tool: mantle_buildTransferNative
+// =========================================================================
+
+export async function buildTransferNative(
+  args: Record<string, unknown>,
+  deps?: Partial<DefiWriteDeps>
+): Promise<UnsignedTxResult> {
+  const d = withDeps(deps);
+  const { network } = normalizeNetwork(args);
+
+  const to = requireAddress(args.to, "to");
+
+  // Reject zero address to prevent silent burns
+  if (to.toLowerCase() === ZERO_ADDRESS) {
+    throw new MantleMcpError(
+      "INVALID_RECIPIENT",
+      "Cannot transfer to the zero address (0x0000...0000). This would irreversibly burn the tokens.",
+      "Provide a valid recipient address.",
+      { field: "to", value: to }
+    );
+  }
+
+  const amountRaw = requirePositiveAmount(args.amount, "amount", 18);
+  const amountDecimal = formatUnits(amountRaw, 18);
+
+  const warnings: string[] = [];
+  const sw = sepoliaWarning(network);
+  if (sw) warnings.push(sw);
+
+  return {
+    intent: "transfer_native",
+    human_summary: `Transfer ${amountDecimal} MNT → ${to}`,
+    unsigned_tx: {
+      to,
+      data: "0x",
+      value: "0x" + amountRaw.toString(16),
+      chainId: chainId(network)
+    },
+    warnings,
+    built_at_utc: d.now()
+  };
+}
+
+// =========================================================================
+// Tool: mantle_buildTransferToken
+// =========================================================================
+
+export async function buildTransferToken(
+  args: Record<string, unknown>,
+  deps?: Partial<DefiWriteDeps>
+): Promise<UnsignedTxResult> {
+  const d = withDeps(deps);
+  const { network } = normalizeNetwork(args);
+
+  const to = requireAddress(args.to, "to");
+
+  // Reject zero address to prevent silent burns
+  if (to.toLowerCase() === ZERO_ADDRESS) {
+    throw new MantleMcpError(
+      "INVALID_RECIPIENT",
+      "Cannot transfer to the zero address (0x0000...0000). This would irreversibly burn the tokens.",
+      "Provide a valid recipient address.",
+      { field: "to", value: to }
+    );
+  }
+
+  const tokenInput = requireString(args.token, "token");
+
+  // Reject native MNT — must use buildTransferNative for native transfers
+  if (tokenInput.toUpperCase() === "MNT") {
+    throw new MantleMcpError(
+      "USE_NATIVE_TRANSFER",
+      "MNT is the native gas token and cannot be transferred via ERC-20 transfer.",
+      "Use mantle_buildTransferNative (CLI: mantle-cli transfer send-native) to transfer native MNT.",
+      { token: tokenInput }
+    );
+  }
+
+  const resolved = await resolveToken(d, tokenInput, network);
+
+  // Double-check: reject if resolved address is "native" sentinel
+  if (resolved.address === "native" || !isAddress(resolved.address, { strict: false })) {
+    throw new MantleMcpError(
+      "USE_NATIVE_TRANSFER",
+      `Token '${resolved.symbol}' resolves to the native asset and cannot be transferred via ERC-20 transfer.`,
+      "Use mantle_buildTransferNative (CLI: mantle-cli transfer send-native) to transfer native MNT.",
+      { token: tokenInput, resolved_address: resolved.address }
+    );
+  }
+
+  const amountRaw = requirePositiveAmount(args.amount, "amount", resolved.decimals);
+  const amountDecimal = formatUnits(amountRaw, resolved.decimals);
+
+  const transferWarnings: string[] = [];
+  const sw = sepoliaWarning(network);
+  if (sw) transferWarnings.push(sw);
+
+  const data = encodeFunctionData({
+    abi: ERC20_ABI,
+    functionName: "transfer",
+    args: [to as `0x${string}`, amountRaw]
+  });
+
+  return {
+    intent: "transfer_token",
+    human_summary: `Transfer ${amountDecimal} ${resolved.symbol} → ${to}`,
+    unsigned_tx: {
+      to: resolved.address,
+      data,
+      value: "0x0",
+      chainId: chainId(network)
+    },
+    warnings: transferWarnings,
+    built_at_utc: d.now(),
+    token_info: {
+      token_in: {
+        symbol: resolved.symbol,
+        decimals: resolved.decimals,
+        address: resolved.address
+      }
+    }
   };
 }
 
@@ -838,6 +1001,20 @@ export async function buildSwap(
   const tokenOutInput = requireString(args.token_out, "token_out");
   const tokenIn = await resolveToken(d, tokenInInput, network);
   const tokenOut = await resolveToken(d, tokenOutInput, network);
+
+  // xStocks RWA tokens only have liquidity on Fluxion
+  const xStockToken = [tokenIn, tokenOut].find(t =>
+    XSTOCKS_SYMBOLS.has(t.symbol.toUpperCase())
+  );
+  if (xStockToken && provider !== "fluxion") {
+    throw new MantleMcpError(
+      "XSTOCKS_FLUXION_ONLY",
+      `${xStockToken.symbol} is an xStocks RWA token that only has liquidity on Fluxion (USDC pairs, fee_tier=3000).`,
+      `Use provider='fluxion' for xStocks swaps: mantle-cli swap build-swap --provider fluxion --in ${tokenIn.symbol} --out ${tokenOut.symbol} --amount <n> --recipient <addr> --json`,
+      { token: xStockToken.symbol, requested_provider: provider, required_provider: "fluxion" }
+    );
+  }
+
   const amountInRaw = requirePositiveAmount(
     args.amount_in,
     "amount_in",
@@ -875,6 +1052,40 @@ export async function buildSwap(
 
   const amountInDecimal = formatUnits(amountInRaw, tokenIn.decimals);
   const deadline = d.deadline();
+
+  // ── Allowance pre-check (non-blocking warning) ────────────────────
+  // When an explicit owner/sender address is provided, read their allowance
+  // for the router and warn if insufficient. We do NOT use `recipient` here
+  // because recipient is the output receiver, not the token owner/signer.
+  const swapWarnings: string[] = [];
+  const swSepolia = sepoliaWarning(network);
+  if (swSepolia) swapWarnings.push(swSepolia);
+  const swapOwner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
+    ? getAddress(args.owner)
+    : null;
+  if (swapOwner) {
+    try {
+      const routerKey = provider === "merchant_moe" ? "lb_router_v2_2" : "swap_router";
+      const routerAddress = getContractAddress(provider, routerKey, network);
+      const client = d.getClient(network);
+      const allowance = await client.readContract({
+        address: tokenIn.address as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: "allowance",
+        args: [swapOwner as `0x${string}`, routerAddress as `0x${string}`]
+      }) as bigint;
+      if (allowance < amountInRaw) {
+        const allowanceDecimal = formatUnits(allowance, tokenIn.decimals);
+        swapWarnings.push(
+          `INSUFFICIENT ALLOWANCE: ${tokenIn.symbol} allowance for ${provider} router is ${allowanceDecimal}, ` +
+          `but swap requires ${amountInDecimal}. Build an approve tx first: ` +
+          `mantle-cli swap approve --token ${tokenIn.symbol} --spender ${routerAddress} --amount ${amountInDecimal} --owner ${swapOwner} --json`
+        );
+      }
+    } catch {
+      // Non-critical — proceed without allowance check
+    }
+  }
 
   if (provider === "agni" || provider === "fluxion") {
     // Resolve fee_tier: caller-explicit > on-chain discovery > multi-hop > error
@@ -928,14 +1139,14 @@ export async function buildSwap(
         feeTier,
         now: d.now()
       });
-      result.warnings.push(...crossWarnings);
+      result.warnings.push(...crossWarnings, ...swapWarnings);
       return result;
     }
 
     // No direct pair — try multi-hop via bridge token
     const route = findV3Route(provider, tokenIn, tokenOut, network);
     if (route) {
-      return buildV3MultihopSwap({
+      const result = buildV3MultihopSwap({
         provider,
         route,
         tokenIn,
@@ -948,6 +1159,8 @@ export async function buildSwap(
         network,
         now: d.now()
       });
+      result.warnings.push(...swapWarnings);
+      return result;
     }
 
     const available = listPairs(provider).map(
@@ -997,7 +1210,7 @@ export async function buildSwap(
       }
     }
 
-    return buildMoeSwap({
+    const moeResult = buildMoeSwap({
       tokenIn,
       tokenOut,
       amountInRaw,
@@ -1011,6 +1224,8 @@ export async function buildSwap(
       routerVersion,
       now: d.now()
     });
+    moeResult.warnings.push(...swapWarnings);
+    return moeResult;
   }
 
   // On-chain primary: use LB Quoter to discover the best route
@@ -1049,6 +1264,7 @@ export async function buildSwap(
       );
     }
 
+    result.warnings.push(...swapWarnings);
     return result;
   }
 
@@ -1077,7 +1293,8 @@ export async function buildSwap(
     });
     result.warnings.push(
       "LB Quoter unavailable — using static registry for bin_step. " +
-      "Route may differ from quote. Consider verifying with mantle_getSwapQuote."
+      "Route may differ from quote. Consider verifying with mantle_getSwapQuote.",
+      ...swapWarnings
     );
     return result;
   }
@@ -1099,7 +1316,8 @@ export async function buildSwap(
     });
     result.warnings.push(
       "LB Quoter unavailable — using static registry for multi-hop route. " +
-      "Route may differ from quote."
+      "Route may differ from quote.",
+      ...swapWarnings
     );
     return result;
   }
@@ -1615,7 +1833,7 @@ export async function buildAddLiquidity(
   const amountBDecimal = formatUnits(amountBRaw, tokenB.decimals);
 
   if (provider === "agni" || provider === "fluxion") {
-    const result = buildV3AddLiquidity({
+    const result = await buildV3AddLiquidity({
       provider,
       tokenA,
       tokenB,
@@ -1667,7 +1885,7 @@ export async function buildAddLiquidity(
   return result;
 }
 
-function buildV3AddLiquidity(params: {
+async function buildV3AddLiquidity(params: {
   provider: "agni" | "fluxion";
   tokenA: ResolvedToken;
   tokenB: ResolvedToken;
@@ -1683,7 +1901,7 @@ function buildV3AddLiquidity(params: {
   tickLower: number;
   tickUpper: number;
   now: string;
-}): UnsignedTxResult {
+}): Promise<UnsignedTxResult> {
   const {
     provider,
     tokenA,
@@ -1742,10 +1960,43 @@ function buildV3AddLiquidity(params: {
 
   const providerLabel = provider === "agni" ? "Agni" : "Fluxion";
   const warnings: string[] = [];
+  const swLp = sepoliaWarning(network);
+  if (swLp) warnings.push(swLp);
   if (tickLower === -887220 && tickUpper === 887220) {
     warnings.push(
       "Using full-range tick bounds (MIN_TICK to MAX_TICK). Consider narrower range for concentrated liquidity."
     );
+  }
+
+  // Check if tick range includes current pool price
+  try {
+    const client = getPublicClient(network);
+    const factoryAddress = getContractAddress(provider, "factory", network);
+    const poolAddr = await client.readContract({
+      address: factoryAddress as `0x${string}`,
+      abi: [{ type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "", type: "address" }, { name: "", type: "address" }, { name: "", type: "uint24" }], outputs: [{ name: "", type: "address" }] }] as const,
+      functionName: "getPool",
+      args: [token0.address as `0x${string}`, token1.address as `0x${string}`, feeTier]
+    }) as `0x${string}`;
+
+    if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
+      const slot0 = await client.readContract({
+        address: poolAddr,
+        abi: [{ type: "function", name: "slot0", stateMutability: "view", inputs: [], outputs: [{ name: "sqrtPriceX96", type: "uint160" }, { name: "tick", type: "int24" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint16" }, { name: "", type: "uint8" }, { name: "", type: "bool" }] }] as const,
+        functionName: "slot0"
+      }) as readonly [bigint, number, ...unknown[]];
+
+      const currentTick = slot0[1];
+      if (currentTick < tickLower || currentTick >= tickUpper) {
+        warnings.push(
+          `OUT-OF-RANGE WARNING: Current pool tick is ${currentTick}, but your range is [${tickLower}, ${tickUpper}]. ` +
+          `This position will NOT earn any trading fees until the price moves into your range. ` +
+          `Consider using mantle-cli lp suggest-ticks to get recommended tick ranges.`
+        );
+      }
+    }
+  } catch {
+    // Non-critical — proceed without tick check
   }
 
   return {
@@ -2217,6 +2468,8 @@ export async function buildAaveBorrow(
     "Ensure you have sufficient collateral deposited before borrowing.",
     "Monitor your health factor to avoid liquidation."
   ];
+  const swBorrow = sepoliaWarning(network);
+  if (swBorrow) warnings.push(swBorrow);
 
   // ── Isolation Mode preflight ────────────────────────────────────────
   // When the requested asset is NOT borrowable in isolation, read the
@@ -2280,6 +2533,33 @@ export async function buildAaveBorrow(
         `is an Isolation Mode asset (${isolationModeSymbols().join(", ")}), this transaction WILL REVERT.`
       );
     }
+  }
+
+  // ── Health factor pre-check ─────────────────────────────────────────
+  // Read current health factor to warn if this borrow brings it close
+  // to liquidation. Non-blocking — failure to read just skips the check.
+  try {
+    const client = d.getClient(network);
+    const accountData = await client.readContract({
+      address: poolAddress as `0x${string}`,
+      abi: AAVE_V3_POOL_ABI,
+      functionName: "getUserAccountData",
+      args: [onBehalfOf as `0x${string}`]
+    }) as [bigint, bigint, bigint, bigint, bigint, bigint];
+
+    const currentHf = accountData[5]; // healthFactor in WAD (1e18 = 1.0)
+    const WAD = 10n ** 18n;
+
+    if (currentHf > 0n && currentHf < WAD * 2n) {
+      const hfDecimal = formatUnits(currentHf, 18);
+      warnings.push(
+        `HEALTH FACTOR WARNING: Current health factor is ${hfDecimal}. ` +
+        `This borrow will further reduce it. Health factor below 1.0 triggers liquidation. ` +
+        `Consider borrowing a smaller amount or adding more collateral first.`
+      );
+    }
+  } catch {
+    // Non-critical — proceed without health factor check
   }
 
   const modeLabel = interestRateMode === 2 ? "variable" : "stable";
@@ -2818,6 +3098,71 @@ export async function buildCollectFees(
 // =========================================================================
 
 export const defiWriteTools: Record<string, Tool> = {
+  mantle_buildTransferNative: {
+    name: "mantle_buildTransferNative",
+    description:
+      "Build an unsigned transaction to transfer native MNT to a recipient address. " +
+      "Handles decimal-to-wei conversion and hex encoding deterministically — " +
+      "NEVER manually compute wei values or hex-encode transfer amounts.\n\n" +
+      "Examples:\n" +
+      "- Send 15 MNT: amount='15', to='0x...'\n" +
+      "- Send 0.5 MNT: amount='0.5', to='0x...'",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: {
+          type: "string",
+          description: "Recipient address."
+        },
+        amount: {
+          type: "string",
+          description: "Decimal amount of MNT to transfer (e.g. '15', '0.5')."
+        },
+        network: {
+          type: "string",
+          description: "Network: 'mainnet' (default) or 'sepolia'."
+        }
+      },
+      required: ["to", "amount"]
+    },
+    handler: buildTransferNative
+  },
+
+  mantle_buildTransferToken: {
+    name: "mantle_buildTransferToken",
+    description:
+      "Build an unsigned ERC-20 transfer transaction to send tokens to a recipient. " +
+      "Resolves token symbol to address and decimals from the registry, then encodes " +
+      "the transfer calldata deterministically — NEVER manually compute raw amounts " +
+      "or hex-encode transfer values.\n\n" +
+      "Examples:\n" +
+      "- Send 100 USDC: token='USDC', amount='100', to='0x...'\n" +
+      "- Send 50 WMNT: token='WMNT', amount='50', to='0x...'",
+    inputSchema: {
+      type: "object",
+      properties: {
+        token: {
+          type: "string",
+          description: "Token symbol (e.g. 'USDC', 'WMNT', 'USDT0') or address."
+        },
+        to: {
+          type: "string",
+          description: "Recipient address."
+        },
+        amount: {
+          type: "string",
+          description: "Decimal amount of tokens to transfer (e.g. '100', '0.5')."
+        },
+        network: {
+          type: "string",
+          description: "Network: 'mainnet' (default) or 'sepolia'."
+        }
+      },
+      required: ["token", "to", "amount"]
+    },
+    handler: buildTransferToken
+  },
+
   mantle_buildApprove: {
     name: "mantle_buildApprove",
     description:
@@ -2960,6 +3305,10 @@ export const defiWriteTools: Record<string, Tool> = {
         quote_bin_step: {
           type: "number",
           description: "Bin step from a prior getSwapQuote resolved_pool_params. Used to cross-validate — emits a warning if build resolves a different bin step."
+        },
+        owner: {
+          type: "string",
+          description: "Wallet address that owns the input tokens (the signer). Used for optional allowance pre-check — emits a warning if allowance is insufficient."
         }
       },
       required: ["provider", "token_in", "token_out", "amount_in", "recipient"]
