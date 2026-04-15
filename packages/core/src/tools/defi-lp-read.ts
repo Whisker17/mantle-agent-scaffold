@@ -500,6 +500,110 @@ interface PositionResult {
   in_range: boolean;
 }
 
+/**
+ * Discover token IDs owned by `owner` when ERC721Enumerable is unavailable.
+ *
+ * Strategy: query Transfer event logs where `to = owner`, deduplicate, then
+ * batch-verify current ownership via ownerOf. This handles tokens that were
+ * received and later transferred away.
+ *
+ * Many RPCs limit the block range for eth_getLogs (Mantle's public RPC
+ * commonly caps at ~100k blocks). We use a chunked approach, scanning
+ * backward from the chain tip to find events efficiently.
+ */
+async function discoverTokenIdsByEvents(
+  client: ReturnType<typeof getPublicClient>,
+  positionManager: `0x${string}`,
+  owner: `0x${string}`,
+  maxPositions: number
+): Promise<bigint[]> {
+  const latestBlock = await client.getBlockNumber();
+
+  // Scan backward in chunks. Most users' positions are recent, so
+  // scanning from the tip is fast and handles the common case in 1-2 RPCs.
+  const CHUNK_SIZE = 100_000n;
+  // Cap total scan depth to ~20M blocks (well beyond Mantle's full history)
+  const MIN_BLOCK = latestBlock > 20_000_000n ? latestBlock - 20_000_000n : 0n;
+
+  const candidateIds = new Set<bigint>();
+
+  let toBlock = latestBlock;
+  while (toBlock > MIN_BLOCK) {
+    const fromBlock = toBlock > CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : MIN_BLOCK;
+    try {
+      const logs = await client.getContractEvents({
+        address: positionManager,
+        abi: V3_POSITION_MANAGER_ABI,
+        eventName: "Transfer",
+        args: { to: owner },
+        fromBlock,
+        toBlock
+      });
+      for (const log of logs) {
+        const tokenId = (log.args as { tokenId?: bigint }).tokenId;
+        if (tokenId != null) candidateIds.add(tokenId);
+      }
+    } catch {
+      // If a chunk fails (e.g., range still too large), halve the chunk
+      // and retry once with smaller windows within this range.
+      const halfChunk = (toBlock - fromBlock) / 2n;
+      if (halfChunk > 0n) {
+        for (const [subFrom, subTo] of [
+          [fromBlock, fromBlock + halfChunk],
+          [fromBlock + halfChunk + 1n, toBlock]
+        ] as const) {
+          try {
+            const logs = await client.getContractEvents({
+              address: positionManager,
+              abi: V3_POSITION_MANAGER_ABI,
+              eventName: "Transfer",
+              args: { to: owner },
+              fromBlock: subFrom,
+              toBlock: subTo
+            });
+            for (const log of logs) {
+              const tokenId = (log.args as { tokenId?: bigint }).tokenId;
+              if (tokenId != null) candidateIds.add(tokenId);
+            }
+          } catch {
+            // Skip this sub-chunk on failure — best effort
+          }
+        }
+      }
+    }
+    toBlock = fromBlock > 0n ? fromBlock - 1n : 0n;
+    if (fromBlock === MIN_BLOCK) break;
+  }
+
+  if (candidateIds.size === 0) return [];
+
+  // Batch-verify current ownership — tokens may have been transferred away
+  const idList = Array.from(candidateIds).slice(0, maxPositions * 2);
+  const ownerOfCalls = idList.map((id) => ({
+    address: positionManager,
+    abi: V3_POSITION_MANAGER_ABI,
+    functionName: "ownerOf" as const,
+    args: [id] as const
+  }));
+
+  const ownerOfResults = await client.multicall({ contracts: ownerOfCalls });
+
+  const ownedIds: bigint[] = [];
+  const ownerLower = owner.toLowerCase();
+  for (let i = 0; i < ownerOfResults.length && ownedIds.length < maxPositions; i++) {
+    const res = ownerOfResults[i];
+    if (
+      res.status === "success" &&
+      typeof res.result === "string" &&
+      res.result.toLowerCase() === ownerLower
+    ) {
+      ownedIds.push(idList[i]);
+    }
+  }
+
+  return ownedIds;
+}
+
 async function readPositionsForProvider(
   provider: V3Provider,
   owner: `0x${string}`,
@@ -526,7 +630,12 @@ async function readPositionsForProvider(
 
   const cappedCount = Math.min(count, MAX_POSITIONS_PER_PROVIDER);
 
-  // Step 2: Get all token IDs via multicall
+  // Step 2: Get all token IDs
+  // Try ERC721Enumerable first (tokenOfOwnerByIndex). Agni and some V3
+  // forks do NOT implement Enumerable, so every multicall entry will fail.
+  // When that happens, fall back to Transfer event log scanning.
+  let tokenIds: bigint[] = [];
+
   const indexCalls = Array.from({ length: cappedCount }, (_, i) => ({
     address: positionManager,
     abi: V3_POSITION_MANAGER_ABI,
@@ -536,11 +645,16 @@ async function readPositionsForProvider(
 
   const indexResults = await client.multicall({ contracts: indexCalls });
 
-  const tokenIds: bigint[] = [];
   for (const res of indexResults) {
     if (res.status === "success") {
       tokenIds.push(res.result as bigint);
     }
+  }
+
+  // Fallback: if Enumerable is unsupported, discover token IDs from
+  // Transfer event logs and verify current ownership via ownerOf.
+  if (tokenIds.length === 0 && count > 0) {
+    tokenIds = await discoverTokenIdsByEvents(client, positionManager, owner, cappedCount);
   }
 
   if (tokenIds.length === 0) return [];
@@ -2356,36 +2470,17 @@ export const defiLpReadTools: Record<string, Tool> = {
     handler: getLBPairState
   },
 
-  mantle_getV3Positions: {
-    name: "mantle_getV3Positions",
-    description:
-      "Enumerate all V3 LP positions for a wallet across Agni Finance and Fluxion on Mantle. Returns token IDs, tick ranges, liquidity, uncollected fees, and whether each position is in-range.\n\nBy default filters out zero-liquidity, zero-fees positions (set include_empty=true to show all).\n\nExamples:\n- All positions: owner='<wallet_address>'\n- Agni only: owner='<wallet_address>', provider='agni'\n- Include empty: owner='<wallet_address>', include_empty=true",
-    inputSchema: {
-      type: "object",
-      properties: {
-        owner: {
-          type: "string",
-          description: "Wallet address to enumerate LP positions for."
-        },
-        provider: {
-          type: "string",
-          description:
-            "Optional filter: 'agni' or 'fluxion'. Omit to scan both."
-        },
-        include_empty: {
-          type: "boolean",
-          description:
-            "Include zero-liquidity and zero-fees positions (default: false)."
-        },
-        network: {
-          type: "string",
-          description: "Network: 'mainnet' (default) or 'sepolia'."
-        }
-      },
-      required: ["owner"]
-    },
-    handler: getV3Positions
-  },
+  // mantle_getV3Positions: TEMPORARILY DISABLED
+  // Agni's NonfungiblePositionManager does not implement ERC721Enumerable
+  // (no tokenOfOwnerByIndex). The event-based fallback also fails due to
+  // Mantle RPC block-range limits. Re-enable once a reliable enumeration
+  // strategy is implemented (subgraph, or paginated event scanning).
+  //
+  // mantle_getV3Positions: {
+  //   name: "mantle_getV3Positions",
+  //   ...
+  //   handler: getV3Positions
+  // },
 
   mantle_suggestTickRange: {
     name: "mantle_suggestTickRange",

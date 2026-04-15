@@ -195,53 +195,24 @@ export function registerLp(parent: Command): void {
     });
 
   // ── positions ───────────────────────────────────────────────────────
+  // TEMPORARILY DISABLED: Agni's NonfungiblePositionManager lacks
+  // ERC721Enumerable. Re-enable once a reliable enumeration strategy
+  // (subgraph or paginated event scanning) is implemented.
   group
     .command("positions")
-    .description("List V3 LP positions for an owner across Agni and Fluxion")
+    .description("[DISABLED] List V3 LP positions for an owner across Agni and Fluxion")
     .requiredOption("--owner <address>", "wallet address to query")
     .option("--provider <provider>", "filter by provider: agni or fluxion")
     .option("--include-empty", "include zero-liquidity positions", false)
-    .action(async (opts: Record<string, unknown>, cmd: Command) => {
-      const globals = cmd.optsWithGlobals();
-      const result = await allTools["mantle_getV3Positions"].handler({
-        owner: opts.owner,
-        provider: opts.provider,
-        include_empty: opts.includeEmpty,
-        network: globals.network
-      });
-      if (globals.json) {
-        formatJson(result);
-      } else {
-        const data = result as Record<string, unknown>;
-        const positions = (data.positions ?? []) as Record<string, unknown>[];
-        if (positions.length === 0) {
-          console.log("\n  No V3 LP positions found.\n");
-        } else {
-          formatTable(positions, [
-            { key: "token_id", label: "Token ID" },
-            { key: "provider", label: "Provider" },
-            {
-              key: "token0",
-              label: "Token 0",
-              format: (v) => (v as Record<string, unknown>)?.symbol as string ?? "?"
-            },
-            {
-              key: "token1",
-              label: "Token 1",
-              format: (v) => (v as Record<string, unknown>)?.symbol as string ?? "?"
-            },
-            { key: "fee", label: "Fee", align: "right" },
-            { key: "tick_lower", label: "Tick Lo", align: "right" },
-            { key: "tick_upper", label: "Tick Hi", align: "right" },
-            { key: "liquidity", label: "Liquidity", align: "right" },
-            {
-              key: "in_range",
-              label: "In Range",
-              format: (v) => v === true ? "YES" : v === false ? "NO" : "?"
-            }
-          ]);
-        }
-      }
+    .action(async () => {
+      console.error(
+        "\n  This command is temporarily disabled.\n\n" +
+        "  Agni's NonfungiblePositionManager does not implement ERC721Enumerable,\n" +
+        "  so on-chain position enumeration is unreliable. A fix using subgraph\n" +
+        "  or paginated event scanning is in progress.\n\n" +
+        "  Workaround: check positions on https://agni.finance or via Mantlescan.\n"
+      );
+      process.exitCode = 1;
     });
 
   // ── lb-positions ────────────────────────────────────────────────────
