@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 /** V3 fee tiers to probe (hundredths of a basis point). */
-export const V3_FEE_TIER_CANDIDATES = [100, 500, 3000, 10000] as const;
+export const V3_FEE_TIER_CANDIDATES = [100, 500, 2500, 3000, 10000] as const;
 
 // ---------------------------------------------------------------------------
 // Inline ABIs — kept minimal to avoid importing the full ABI files.

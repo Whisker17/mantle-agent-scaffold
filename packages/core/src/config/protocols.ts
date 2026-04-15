@@ -30,7 +30,8 @@ export const MANTLE_PROTOCOLS: Record<Network, Record<string, ProtocolEntry>> = 
       contracts: {
         swap_router: "0x5628a59df0ecac3f3171f877a94beb26ba6dfaa0",
         position_manager: "0x2b70c4e7ca8e920435a5db191e066e9e3afd8db3",
-        factory: "0xF883162Ed9c7E8EF604214c964c678E40c9B737C"
+        factory: "0xF883162Ed9c7E8EF604214c964c678E40c9B737C",
+        quoter_v2: "0x3E4eE18Ac7280813236a1EB850679Da5322E14CE"
       }
     },
     merchant_moe: {

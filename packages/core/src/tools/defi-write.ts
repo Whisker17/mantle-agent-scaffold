@@ -96,11 +96,8 @@ import {
   type AaveReserveAsset
 } from "../config/aave-reserves.js";
 import {
-  findPair,
-  findPairByAddress,
   listPairs,
   listAllPairs,
-  type DexPair,
   type MoePair,
   type V3Pair
 } from "../config/dex-pairs.js";
@@ -108,8 +105,12 @@ import {
 // ABIs
 import { WMNT_ABI } from "../lib/abis/wmnt.js";
 import { V3_SWAP_ROUTER_ABI, V3_POSITION_MANAGER_ABI } from "../lib/abis/uniswap-v3.js";
-import { LB_ROUTER_ABI, MOE_ROUTER_ABI, LB_QUOTER_ABI, LB_FACTORY_ABI } from "../lib/abis/merchant-moe-lb.js";
+import { LB_ROUTER_ABI, LB_QUOTER_ABI, LB_FACTORY_ABI } from "../lib/abis/merchant-moe-lb.js";
 import { AAVE_V3_POOL_ABI, AAVE_V3_WETH_GATEWAY_ABI } from "../lib/abis/aave-v3-pool.js";
+import {
+  discoverBestV3Pool as discoverBestV3PoolShared,
+  type DiscoveredPool
+} from "../lib/pool-discovery.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -117,12 +118,6 @@ import { AAVE_V3_POOL_ABI, AAVE_V3_WETH_GATEWAY_ABI } from "../lib/abis/aave-v3-
 
 const DEFAULT_DEADLINE_SECONDS = 1200; // 20 minutes
 const MAX_UINT256 = 2n ** 256n - 1n;
-
-/**
- * Common bridge tokens used as intermediaries for multi-hop routing.
- * Ordered by preference (most liquid first).
- */
-const BRIDGE_TOKENS = ["WMNT", "USDC", "USDT0", "USDT", "USDe", "WETH"] as const;
 
 /**
  * xStocks RWA tokens — these ONLY have liquidity on Fluxion (USDC pairs).
@@ -835,57 +830,82 @@ interface V3Route {
   fees: number[];
 }
 
-interface MoeRoute {
-  tokens: ResolvedToken[];
-  binSteps: number[];
-  routerVersions: number[];
-}
-
 /**
- * Find a 2-hop V3 route via common bridge tokens.
- * Returns the first viable route or null.
+ * Find a 2-hop V3 route via common bridge tokens using on-chain factory
+ * discovery. Each leg's fee tier is auto-discovered by querying the V3
+ * factory for all common fee tiers and selecting the pool with the
+ * highest on-chain liquidity.
+ *
+ * This eliminates the need for a static pair registry — any token pair
+ * with on-chain liquidity will be discovered automatically.
  */
-function findV3Route(
+async function findV3Route(
   provider: "agni" | "fluxion",
   tokenIn: ResolvedToken,
   tokenOut: ResolvedToken,
-  network: Network
-): V3Route | null {
-  for (const bridge of BRIDGE_TOKENS) {
-    // Skip if bridge is same as in or out
-    if (bridge.toLowerCase() === tokenIn.symbol.toLowerCase()) continue;
-    if (bridge.toLowerCase() === tokenOut.symbol.toLowerCase()) continue;
+  network: Network,
+  d: DefiWriteDeps
+): Promise<V3Route | null> {
+  const inAddr = tokenIn.address as `0x${string}`;
+  const outAddr = tokenOut.address as `0x${string}`;
 
-    const legA =
-      findPair(provider, tokenIn.symbol, bridge, network) ??
-      findPairByAddress(provider, tokenIn.address, "", network); // fallback not useful here
-    const legB =
-      findPair(provider, bridge, tokenOut.symbol, network);
+  interface RouteCandidate {
+    bridgeSymbol: string;
+    bridgeAddress: string;
+    feeA: number;
+    feeB: number;
+    liquidityScore: bigint; // sum of both legs' liquidity for ranking
+  }
 
-    if (legA && legB && legA.provider !== "merchant_moe" && legB.provider !== "merchant_moe") {
-      // Need to resolve the bridge token address from the pair
-      const bridgeAddress =
-        legA.tokenA.toLowerCase() === tokenIn.symbol.toLowerCase()
-          ? legA.tokenBAddress
-          : legA.tokenAAddress;
+  const candidates: Promise<RouteCandidate | null>[] = [];
 
-      return {
-        tokens: [
-          tokenIn,
-          { address: bridgeAddress, symbol: bridge, decimals: 0 }, // decimals not needed for path encoding
-          tokenOut
-        ],
-        fees: [(legA as V3Pair).feeTier, (legB as V3Pair).feeTier]
-      };
+  for (const [bridgeSymbol, bridgeAddr] of Object.entries(BRIDGE_TOKEN_ADDRESSES)) {
+    const bridge = bridgeAddr as `0x${string}`;
+    if (bridge.toLowerCase() === inAddr.toLowerCase()) continue;
+    if (bridge.toLowerCase() === outAddr.toLowerCase()) continue;
+
+    candidates.push(
+      (async (): Promise<RouteCandidate | null> => {
+        try {
+          const [poolA, poolB] = await Promise.all([
+            discoverBestV3Pool(provider, { address: inAddr, symbol: tokenIn.symbol, decimals: tokenIn.decimals }, { address: bridge, symbol: bridgeSymbol, decimals: 0 }, network, d),
+            discoverBestV3Pool(provider, { address: bridge, symbol: bridgeSymbol, decimals: 0 }, { address: outAddr, symbol: tokenOut.symbol, decimals: tokenOut.decimals }, network, d)
+          ]);
+          if (!poolA || !poolB) return null;
+
+          return {
+            bridgeSymbol,
+            bridgeAddress: bridgeAddr,
+            feeA: poolA.feeTier,
+            feeB: poolB.feeTier,
+            liquidityScore: poolA.liquidity < poolB.liquidity ? poolA.liquidity : poolB.liquidity
+          };
+        } catch {
+          return null;
+        }
+      })()
+    );
+  }
+
+  const results = await Promise.all(candidates);
+  let best: RouteCandidate | null = null;
+  for (const r of results) {
+    if (r && (best === null || r.liquidityScore > best.liquidityScore)) {
+      best = r;
     }
   }
-  return null;
-}
 
-import {
-  discoverBestV3Pool as discoverBestV3PoolShared,
-  type DiscoveredPool
-} from "../lib/pool-discovery.js";
+  if (!best) return null;
+
+  return {
+    tokens: [
+      tokenIn,
+      { address: best.bridgeAddress, symbol: best.bridgeSymbol, decimals: 0 },
+      tokenOut
+    ],
+    fees: [best.feeA, best.feeB]
+  };
+}
 
 /**
  * Thin wrapper around the shared pool discovery that resolves
@@ -910,44 +930,6 @@ async function discoverBestV3Pool(
     tokenIn.address as `0x${string}`,
     tokenOut.address as `0x${string}`
   );
-}
-
-/**
- * Find a 2-hop Merchant Moe route via common bridge tokens.
- */
-function findMoeRoute(
-  tokenIn: ResolvedToken,
-  tokenOut: ResolvedToken,
-  network: Network
-): MoeRoute | null {
-  for (const bridge of BRIDGE_TOKENS) {
-    if (bridge.toLowerCase() === tokenIn.symbol.toLowerCase()) continue;
-    if (bridge.toLowerCase() === tokenOut.symbol.toLowerCase()) continue;
-
-    const legA = findPair("merchant_moe", tokenIn.symbol, bridge, network);
-    const legB = findPair("merchant_moe", bridge, tokenOut.symbol, network);
-
-    if (legA && legB && legA.provider === "merchant_moe" && legB.provider === "merchant_moe") {
-      const bridgeAddress =
-        legA.tokenA.toLowerCase() === tokenIn.symbol.toLowerCase()
-          ? legA.tokenBAddress
-          : legA.tokenAAddress;
-
-      return {
-        tokens: [
-          tokenIn,
-          { address: bridgeAddress, symbol: bridge, decimals: 0 },
-          tokenOut
-        ],
-        binSteps: [(legA as MoePair).binStep, (legB as MoePair).binStep],
-        routerVersions: [
-          (legA as MoePair).routerVersion ?? 0,
-          (legB as MoePair).routerVersion ?? 0
-        ]
-      };
-    }
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,11 +1139,6 @@ export async function buildSwap(
     typeof args.slippage_bps === "number" ? args.slippage_bps : 50; // default 0.5%
   const recipient = requireAddress(args.recipient, "recipient");
 
-  // Auto-resolve pair params from known pairs registry
-  const knownPair =
-    findPair(provider, tokenIn.symbol, tokenOut.symbol, network) ??
-    findPairByAddress(provider, tokenIn.address, tokenOut.address, network);
-
   // Accept caller-provided amount_out_min (from a prior quote call).
   // SAFETY: reject zero/missing amount_out_min unless explicitly opted out with
   // allow_zero_min=true. This prevents building swap calldata with no slippage
@@ -1233,27 +1210,29 @@ export async function buildSwap(
       const bestPool = await discoverBestV3Pool(provider, tokenIn, tokenOut, network, d);
       if (bestPool) {
         feeTier = bestPool.feeTier;
-      } else if (knownPair && knownPair.provider !== "merchant_moe") {
-        // Fallback to static registry (pool may exist but have 0 liquidity)
-        feeTier = (knownPair as V3Pair).feeTier;
       }
     }
 
     if (feeTier !== undefined) {
-      // Cross-validate against quote parameters if provided
+      // Cross-validate against quote parameters if provided — ABORT on mismatch
       const quoteFeeTier = typeof args.quote_fee_tier === "number" ? args.quote_fee_tier : null;
       const quoteProvider = typeof args.quote_provider === "string" ? args.quote_provider : null;
-      const crossWarnings: string[] = [];
       if (quoteFeeTier != null && quoteFeeTier !== feeTier) {
-        crossWarnings.push(
+        throw new MantleMcpError(
+          "QUOTE_BUILD_MISMATCH",
           `Quote used fee_tier ${quoteFeeTier} but build resolved fee_tier ${feeTier}. ` +
-          `The minimum_out from your quote may not provide accurate slippage protection.`
+          `The minimum_out from your quote does not provide accurate slippage protection and the swap would likely result in significant losses.`,
+          `Re-run mantle_getSwapQuote with provider='best' to get a fresh quote that matches the current best pool, then use the new minimum_out_raw.`,
+          { quote_fee_tier: quoteFeeTier, build_fee_tier: feeTier, provider }
         );
       }
       if (quoteProvider != null && quoteProvider !== provider) {
-        crossWarnings.push(
+        throw new MantleMcpError(
+          "QUOTE_BUILD_MISMATCH",
           `Quote was from ${quoteProvider} but building on ${provider}. ` +
-          `The minimum_out may not provide accurate slippage protection.`
+          `The minimum_out may not provide accurate slippage protection because different DEXes have different pricing.`,
+          `Re-run mantle_getSwapQuote with provider='best' to get a fresh quote, then build with the winning provider.`,
+          { quote_provider: quoteProvider, build_provider: provider }
         );
       }
 
@@ -1271,13 +1250,24 @@ export async function buildSwap(
         feeTier,
         now: d.now()
       });
-      result.warnings.push(...crossWarnings, ...swapWarnings);
+      result.warnings.push(...swapWarnings);
       return result;
     }
 
-    // No direct pair — try multi-hop via bridge token
-    const route = findV3Route(provider, tokenIn, tokenOut, network);
+    // No direct pair — try multi-hop via bridge token (on-chain discovery)
+    const route = await findV3Route(provider, tokenIn, tokenOut, network, d);
     if (route) {
+      // Cross-validate provider — ABORT if quote was from a different DEX
+      const quoteProvider = typeof args.quote_provider === "string" ? args.quote_provider : null;
+      if (quoteProvider != null && quoteProvider !== provider) {
+        throw new MantleMcpError(
+          "QUOTE_BUILD_MISMATCH",
+          `Quote was from ${quoteProvider} but building on ${provider}. ` +
+          `The minimum_out may not provide accurate slippage protection because different DEXes have different pricing.`,
+          `Re-run mantle_getSwapQuote with provider='best' to get a fresh quote, then build with the winning provider.`,
+          { quote_provider: quoteProvider, build_provider: provider }
+        );
+      }
       const result = buildV3MultihopSwap({
         provider,
         route,
@@ -1295,19 +1285,19 @@ export async function buildSwap(
       return result;
     }
 
-    const available = listPairs(provider).map(
-      (p) => `${p.tokenA}/${p.tokenB}`
-    );
     throw new MantleMcpError(
-      "UNKNOWN_PAIR",
-      `No known fee_tier or multi-hop route for ${tokenIn.symbol}/${tokenOut.symbol} on ${provider}. Provide fee_tier explicitly.`,
-      `Known pairs on ${provider}: ${available.join(", ") || "none"}. Common fee tiers: 500 (0.05%), 3000 (0.3%), 10000 (1%).`,
+      "NO_ROUTE_FOUND",
+      `No on-chain pool or multi-hop route found for ${tokenIn.symbol}/${tokenOut.symbol} on ${provider}. ` +
+      `The V3 factory returned no pools with liquidity at any fee tier, and no 2-hop path via bridge tokens was viable.`,
+      `Try: (1) Call mantle_getSwapQuote with provider='best' to check all DEXes. ` +
+      `(2) Provide fee_tier explicitly if you know the pool parameters. ` +
+      `Common fee tiers: 100 (0.01%), 500 (0.05%), 2500 (0.25%), 3000 (0.3%), 10000 (1%).`,
       { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
     );
   }
 
   // merchant_moe — resolve route:
-  //   caller-explicit bin_step > LB Quoter on-chain > static registry fallback
+  //   caller-explicit bin_step > LB Quoter on-chain discovery
   if (typeof args.bin_step === "number") {
     // User explicitly provided bin_step — resolve router_version from on-chain
     // factory to avoid the V1-default (0) being wrong for V2.2 pools.
@@ -1335,10 +1325,7 @@ export async function buildSwap(
           routerVersion = 3;
         }
       } catch {
-        // Factory query failed — fall back to static registry or default
-        if (knownPair && knownPair.provider === "merchant_moe") {
-          routerVersion = (knownPair as MoePair).routerVersion ?? 0;
-        }
+        // Factory query failed — default to V1 routing (works for all pools)
       }
     }
 
@@ -1380,19 +1367,25 @@ export async function buildSwap(
       now: d.now()
     });
 
-    // Cross-validate against quote parameters if provided
+    // Cross-validate against quote parameters — ABORT on mismatch
     const quoteBinStep = typeof args.quote_bin_step === "number" ? args.quote_bin_step : null;
     const quoteProvider = typeof args.quote_provider === "string" ? args.quote_provider : null;
     if (quoteBinStep != null && moeQuoterRoute.binSteps[0] !== quoteBinStep) {
-      result.warnings.push(
+      throw new MantleMcpError(
+        "QUOTE_BUILD_MISMATCH",
         `Quote used bin_step ${quoteBinStep} but build resolved bin_step ${moeQuoterRoute.binSteps[0]}. ` +
-        `The minimum_out from your quote may not provide accurate slippage protection.`
+        `The minimum_out from your quote does not provide accurate slippage protection and the swap would likely result in significant losses.`,
+        `Re-run mantle_getSwapQuote with provider='best' to get a fresh quote that matches the current best pool, then use the new minimum_out_raw.`,
+        { quote_bin_step: quoteBinStep, build_bin_step: moeQuoterRoute.binSteps[0], provider: "merchant_moe" }
       );
     }
     if (quoteProvider != null && quoteProvider !== "merchant_moe") {
-      result.warnings.push(
+      throw new MantleMcpError(
+        "QUOTE_BUILD_MISMATCH",
         `Quote was from ${quoteProvider} but building on merchant_moe. ` +
-        `The minimum_out may not provide accurate slippage protection.`
+        `The minimum_out may not provide accurate slippage protection because different DEXes have different pricing.`,
+        `Re-run mantle_getSwapQuote with provider='best' to get a fresh quote, then build with the winning provider.`,
+        { quote_provider: quoteProvider, build_provider: "merchant_moe" }
       );
     }
 
@@ -1400,67 +1393,13 @@ export async function buildSwap(
     return result;
   }
 
-  // Static registry fallback — only if LB Quoter fails/unavailable
-  let binStep: number | undefined;
-  let routerVersion: number = 0;
-  if (knownPair && knownPair.provider === "merchant_moe") {
-    binStep = (knownPair as MoePair).binStep;
-    routerVersion = (knownPair as MoePair).routerVersion ?? 0;
-  }
-
-  if (binStep !== undefined) {
-    const result = buildMoeSwap({
-      tokenIn,
-      tokenOut,
-      amountInRaw,
-      amountInDecimal,
-      amountOutMin,
-      slippageBps,
-      recipient,
-      deadline,
-      network,
-      binStep,
-      routerVersion,
-      now: d.now()
-    });
-    result.warnings.push(
-      "LB Quoter unavailable — using static registry for bin_step. " +
-      "Route may differ from quote. Consider verifying with mantle_getSwapQuote.",
-      ...swapWarnings
-    );
-    return result;
-  }
-
-  // Static multi-hop fallback
-  const moeRoute = findMoeRoute(tokenIn, tokenOut, network);
-  if (moeRoute) {
-    const result = buildMoeMultihopSwap({
-      route: moeRoute,
-      tokenIn,
-      tokenOut,
-      amountInRaw,
-      amountInDecimal,
-      amountOutMin,
-      recipient,
-      deadline,
-      network,
-      now: d.now()
-    });
-    result.warnings.push(
-      "LB Quoter unavailable — using static registry for multi-hop route. " +
-      "Route may differ from quote.",
-      ...swapWarnings
-    );
-    return result;
-  }
-
-  const available = listPairs("merchant_moe").map(
-    (p) => `${p.tokenA}/${p.tokenB}`
-  );
+  // No route found via on-chain LB Quoter or explicit bin_step
   throw new MantleMcpError(
-    "UNKNOWN_PAIR",
-    `No known bin_step or multi-hop route for ${tokenIn.symbol}/${tokenOut.symbol} on Merchant Moe. Provide bin_step explicitly.`,
-    `Known pairs on Merchant Moe: ${available.join(", ")}. Common bin steps: 1 (stablecoins), 2 (LSTs), 25 (volatile).`,
+    "NO_ROUTE_FOUND",
+    `No on-chain route found for ${tokenIn.symbol}/${tokenOut.symbol} on Merchant Moe. The LB Quoter could not discover a direct or multi-hop path with liquidity.`,
+    `Try: (1) Call mantle_getSwapQuote with provider='best' to check all DEXes. ` +
+    `(2) Provide bin_step explicitly if you know the pool parameters. ` +
+    `Common bin steps: 1 (stablecoins), 2 (LSTs), 10-25 (volatile).`,
     { provider, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol }
   );
 }
@@ -1698,71 +1637,6 @@ function buildV3MultihopSwap(params: {
     pool_params: {
       provider,
       fee_tier: route.fees[0] // primary leg fee tier
-    },
-    warnings,
-    built_at_utc: now
-  };
-}
-
-function buildMoeMultihopSwap(params: {
-  route: MoeRoute;
-  tokenIn: ResolvedToken;
-  tokenOut: ResolvedToken;
-  amountInRaw: bigint;
-  amountInDecimal: string;
-  amountOutMin: bigint;
-  recipient: string;
-  deadline: bigint;
-  network: Network;
-  now: string;
-}): UnsignedTxResult {
-  const {
-    route, tokenIn, tokenOut, amountInRaw, amountInDecimal,
-    amountOutMin, recipient, deadline, network, now
-  } = params;
-
-  const routerAddress = getContractAddress("merchant_moe", "lb_router_v2_2", network);
-  const hops = route.tokens.map((t) => t.symbol).join(" → ");
-
-  const path = {
-    pairBinSteps: route.binSteps.map(BigInt),
-    versions: route.routerVersions,
-    tokenPath: route.tokens.map((t) => t.address as `0x${string}`)
-  };
-
-  const data = encodeFunctionData({
-    abi: LB_ROUTER_ABI,
-    functionName: "swapExactTokensForTokens",
-    args: [amountInRaw, amountOutMin, path, recipient as `0x${string}`, deadline]
-  });
-
-  const warnings: string[] = [];
-  if (amountOutMin === 0n) {
-    warnings.push(
-      "amountOutMin is 0. Multi-hop swaps have higher slippage risk — call mantle_getSwapQuote first."
-    );
-  }
-  warnings.push(
-    `Multi-hop route: ${hops} (binSteps: ${route.binSteps.join(" → ")}, versions: ${route.routerVersions.join(" → ")})`
-  );
-
-  return {
-    intent: "swap_multihop",
-    human_summary: `Swap ${amountInDecimal} ${tokenIn.symbol} → ${tokenOut.symbol} via ${hops} on Merchant Moe`,
-    unsigned_tx: {
-      to: routerAddress,
-      data,
-      value: "0x0",
-      chainId: chainId(network),
-      gas: "0x9EB10" // 650000 — higher for multi-hop
-    },
-    token_info: {
-      token_in: { symbol: tokenIn.symbol, decimals: tokenIn.decimals, address: tokenIn.address },
-      token_out: { symbol: tokenOut.symbol, decimals: tokenOut.decimals, address: tokenOut.address }
-    },
-    pool_params: {
-      provider: "merchant_moe",
-      bin_step: route.binSteps[0]
     },
     warnings,
     built_at_utc: now

@@ -243,6 +243,22 @@ const AGNI_PAIRS: V3Pair[] = [
     tokenAAddress: TOKENS.WETH, tokenBAddress: TOKENS.USDT,
     pool: "0x628f7131CF43e88EBe3921Ae78C4bA0C31872bd4",
     feeTier: 500 // 0.05%
+  },
+
+  // ---- USDe pairs on Agni (enables WMNT→USDe→USDC multi-hop) ----
+  {
+    provider: "agni",
+    tokenA: "WMNT", tokenB: "USDe",
+    tokenAAddress: TOKENS.WMNT, tokenBAddress: TOKENS.USDe,
+    pool: "0xeAfc4D6d4c3391Cd4Fc10c85D2f5f972d58C0dD5",
+    feeTier: 2500 // 0.25%
+  },
+  {
+    provider: "agni",
+    tokenA: "USDe", tokenB: "USDC",
+    tokenAAddress: TOKENS.USDe, tokenBAddress: TOKENS.USDC,
+    pool: "0xBCf99c834E65E8a58090E20eDc058279317865BD",
+    feeTier: 100 // 0.01%
   }
 ];
 

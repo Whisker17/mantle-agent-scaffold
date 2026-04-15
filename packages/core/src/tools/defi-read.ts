@@ -31,6 +31,8 @@ interface SwapQuoteDeps {
     fee_tier: number | null;
     /** Actual data source: "onchain" or "dexscreener". Used for source_trace. */
     quote_source?: "onchain" | "dexscreener";
+    /** When quote_source is "dexscreener", explains why on-chain quoter failed. */
+    fallback_reason?: string;
     resolved_pool_params?: {
       fee_tier?: number;
       bin_step?: number;
@@ -773,6 +775,144 @@ async function onChainV3Quote(
 }
 
 /**
+ * Common bridge token addresses for multi-hop V3 route exploration.
+ * Shared across Agni & Fluxion — same set as MOE bridge tokens.
+ */
+const V3_BRIDGE_TOKEN_ADDRESSES: Record<string, string> = {
+  WMNT: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
+  USDC: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
+  USDT0: "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+  USDT: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
+  USDe: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+  WETH: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111"
+};
+
+/**
+ * Encode a V3 packed path: token(20 bytes) + fee(3 bytes) + token(20 bytes) ...
+ */
+function encodeV3Path(tokens: string[], fees: number[]): `0x${string}` {
+  let path = tokens[0].toLowerCase().slice(2);
+  for (let i = 0; i < fees.length; i++) {
+    path += fees[i].toString(16).padStart(6, "0");
+    path += tokens[i + 1].toLowerCase().slice(2);
+  }
+  return `0x${path}` as `0x${string}`;
+}
+
+/**
+ * On-chain V3 multi-hop quote via QuoterV2.quoteExactInput.
+ * Tries all 2-hop paths through common bridge tokens and returns the best.
+ * Falls back when direct single-hop quoting fails (no pool or zero liquidity).
+ */
+async function onChainV3MultiHopQuote(
+  provider: "agni" | "fluxion",
+  tokenIn: ResolvedTokenInput,
+  tokenOut: ResolvedTokenInput,
+  amountInRaw: bigint,
+  network: "mainnet" | "sepolia"
+): Promise<{
+  estimated_out_raw: string;
+  estimated_out_decimal: string;
+  price_impact_pct: number | null;
+  route: string;
+  fee_tier: number | null;
+  quote_source: "onchain";
+  resolved_pool_params: {
+    route_path: string[];
+  };
+} | null> {
+  const client = getPublicClient(network);
+  const factoryAddr = getProtocolAddress(provider, "factory", network);
+  const quoterAddr = getProtocolAddress(provider, "quoter_v2", network);
+  if (!factoryAddr || !quoterAddr) return null;
+
+  const inAddr = tokenIn.address as `0x${string}`;
+  const outAddr = tokenOut.address as `0x${string}`;
+
+  // For each bridge token, discover the best pool for each leg, then quote
+  interface MultiHopCandidate {
+    amountOut: bigint;
+    bridgeSymbol: string;
+    bridgeAddress: string;
+    feeA: number;
+    feeB: number;
+    poolA: string;
+    poolB: string;
+  }
+
+  const candidates: Promise<MultiHopCandidate | null>[] = [];
+
+  for (const [bridgeSymbol, bridgeAddr] of Object.entries(V3_BRIDGE_TOKEN_ADDRESSES)) {
+    const bridge = bridgeAddr as `0x${string}`;
+    if (bridge.toLowerCase() === inAddr.toLowerCase()) continue;
+    if (bridge.toLowerCase() === outAddr.toLowerCase()) continue;
+
+    candidates.push(
+      (async (): Promise<MultiHopCandidate | null> => {
+        try {
+          // Discover best pool for each leg
+          const [poolA, poolB] = await Promise.all([
+            discoverBestV3Pool(client, factoryAddr, inAddr, bridge),
+            discoverBestV3Pool(client, factoryAddr, bridge, outAddr)
+          ]);
+          if (!poolA || !poolB) return null;
+
+          // Quote the full 2-hop path via quoteExactInput
+          const path = encodeV3Path(
+            [inAddr, bridge, outAddr],
+            [poolA.feeTier, poolB.feeTier]
+          );
+
+          const { result } = await client.simulateContract({
+            address: quoterAddr,
+            abi: V3_QUOTER_V2_ABI,
+            functionName: "quoteExactInput",
+            args: [path, amountInRaw]
+          });
+
+          const amountOut = result[0];
+          if (amountOut <= 0n) return null;
+
+          return {
+            amountOut,
+            bridgeSymbol,
+            bridgeAddress: bridgeAddr,
+            feeA: poolA.feeTier,
+            feeB: poolB.feeTier,
+            poolA: poolA.poolAddress,
+            poolB: poolB.poolAddress
+          };
+        } catch {
+          return null;
+        }
+      })()
+    );
+  }
+
+  const results = await Promise.all(candidates);
+  let best: MultiHopCandidate | null = null;
+  for (const r of results) {
+    if (r && (best === null || r.amountOut > best.amountOut)) {
+      best = r;
+    }
+  }
+
+  if (!best) return null;
+
+  return {
+    estimated_out_raw: best.amountOut.toString(),
+    estimated_out_decimal: formatUnits(best.amountOut, tokenOut.decimals ?? 18),
+    price_impact_pct: null,
+    route: `onchain:${provider}:${best.poolA},${best.poolB}`,
+    fee_tier: null,
+    quote_source: "onchain" as const,
+    resolved_pool_params: {
+      route_path: [tokenIn.address, best.bridgeAddress, tokenOut.address]
+    }
+  };
+}
+
+/**
  * Common bridge token addresses for multi-hop route exploration on Moe.
  * The LB Quoter needs explicit intermediate tokens — it does NOT auto-discover them.
  */
@@ -912,6 +1052,7 @@ async function dexScreenerQuote(
   route: string;
   fee_tier: number | null;
   quote_source: "dexscreener";
+  fallback_reason?: string;
 } | null> {
   // DexScreener returns at most ~30 pairs per token. If the target pair
   // has low liquidity relative to other pairs of the input token, it may
@@ -964,20 +1105,32 @@ const defaultSwapDeps: SwapQuoteDeps = {
   resolveTokenInput: (token, network) => resolveTokenInputFromRegistry(token, network ?? "mainnet"),
   quoteProvider: async ({ provider, tokenIn, tokenOut, amountInRaw, network, feeTier }) => {
     // Tier 1: On-chain quoter (uses same pool discovery as buildSwap)
+    let onChainFailureReason: string | undefined;
     try {
       if (provider === "agni" || provider === "fluxion") {
+        // Try single-hop first
         const onChainResult = await onChainV3Quote(provider, tokenIn, tokenOut, amountInRaw, network, feeTier);
         if (onChainResult) return onChainResult;
+        // Fallback: try 2-hop via bridge tokens (e.g. WMNT→USDe→USDC)
+        const multiHopResult = await onChainV3MultiHopQuote(provider, tokenIn, tokenOut, amountInRaw, network);
+        if (multiHopResult) return multiHopResult;
+        onChainFailureReason = "on-chain quoter returned no result (no pool or zero liquidity)";
       } else if (provider === "merchant_moe") {
         const onChainResult = await onChainMoeQuote(tokenIn, tokenOut, amountInRaw, network);
         if (onChainResult) return onChainResult;
+        onChainFailureReason = "on-chain LB quoter returned no result";
       }
-    } catch {
-      // On-chain quoter failed, fall through to DexScreener
+    } catch (err) {
+      onChainFailureReason = `on-chain quoter threw: ${err instanceof Error ? err.message : String(err)}`;
     }
 
-    // Tier 2: DexScreener fallback
-    return dexScreenerQuote(provider, tokenIn, tokenOut, amountInRaw, network, feeTier);
+    // Tier 2: DexScreener fallback — WARN: spot price only, no slippage/depth modeling
+    const fallbackResult = await dexScreenerQuote(provider, tokenIn, tokenOut, amountInRaw, network, feeTier);
+    if (fallbackResult) {
+      fallbackResult.fallback_reason =
+        onChainFailureReason ?? "on-chain quoter unavailable";
+    }
+    return fallbackResult;
   },
   now: () => new Date().toISOString()
 };
@@ -1717,6 +1870,17 @@ export async function getSwapQuote(
 
   // Derive tierUsed from the actual quote source (not the initial default)
   tierUsed = quote.quote_source === "dexscreener" ? 2 : 1;
+
+  // CRITICAL: Surface DexScreener fallback warning — spot price has no slippage/depth modeling
+  if (quote.quote_source === "dexscreener") {
+    const reason = quote.fallback_reason ?? "on-chain quoter unavailable";
+    warnings.push(
+      `DEXSCREENER FALLBACK: This quote uses DexScreener spot price (no slippage or depth modeling). ` +
+      `Reason: ${reason}. ` +
+      `The actual on-chain output may be significantly lower for large trades. ` +
+      `Do NOT use minimum_out_raw for slippage protection — re-quote or use a smaller amount.`
+    );
+  }
 
   const routerAddress = resolveRouterAddress(selectedProvider, network);
   const estimatedOutRaw = selectedOutRaw ?? parseRawAmount(quote.estimated_out_raw, "estimated_out_raw", {
@@ -2541,7 +2705,7 @@ export const defiReadTools: Record<string, Tool> = {
   getSwapQuote: {
     name: "mantle_getSwapQuote",
     description:
-      "Read swap quotes for Agni and Merchant Moe routes. Examples: WMNT 0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8 to USDC 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9 via Agni router 0x319B69888b0d11cEC22caA5034e25FfFBDc88421.",
+      "Read swap quotes across all Mantle DEXes. IMPORTANT: Always use provider='best' (default) to compare quotes from Agni, Merchant Moe, and Fluxion — only specify a single provider if the user explicitly requests a specific DEX. Examples: WMNT 0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8 to USDC 0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2551,7 +2715,8 @@ export const defiReadTools: Record<string, Tool> = {
         provider: {
           type: "string",
           enum: ["agni", "fluxion", "merchant_moe", "best"],
-          description: "Routing provider"
+          default: "best",
+          description: "Routing provider. Defaults to 'best' which compares all DEXes and picks the best rate. Only specify a single provider (agni/fluxion/merchant_moe) if the user explicitly requests a specific DEX."
         },
         fee_tier: { type: "number", description: "Optional V3 fee tier." },
         network: { type: "string", enum: ["mainnet", "sepolia"], description: "Network" }
