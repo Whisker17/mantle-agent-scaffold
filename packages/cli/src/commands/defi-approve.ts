@@ -77,6 +77,8 @@ function formatUnsignedTxResult(data: Record<string, unknown>): void {
 
 function truncateHex(hex: string | undefined): string {
   if (!hex) return "null";
+  // Never truncate calldata — agents and users need the full hex to sign transactions.
+  // Previously this sliced the middle out, causing manual-paste errors (e.g. dropped chars).
   if (hex.length <= 66) return hex;
-  return `${hex.slice(0, 34)}...${hex.slice(-16)} (${hex.length} chars)`;
+  return `${hex} (${hex.length} chars)`;
 }
