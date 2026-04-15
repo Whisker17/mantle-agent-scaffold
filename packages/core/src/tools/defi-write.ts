@@ -507,6 +507,7 @@ interface UnsignedTxResult {
     bin_step?: number;
     router_version?: number;
     pool_address?: string;
+    router_address?: string;
   };
   /** Present on Aave operations — the reserve's aToken and debt token. */
   aave_reserve?: {
@@ -976,7 +977,8 @@ function buildMoeMultihopSwapFromQuoter(params: {
     },
     pool_params: {
       provider: "merchant_moe",
-      bin_step: quoterRoute.binSteps[0]
+      bin_step: quoterRoute.binSteps[0],
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -1046,10 +1048,11 @@ export async function buildSwap(
   const amountInDecimal = formatUnits(amountInRaw, tokenIn.decimals);
   const deadline = d.deadline();
 
-  // ── Allowance pre-check (non-blocking warning) ────────────────────
+  // ── Allowance pre-check (blocking) ───────────────────────────────
   // When an explicit owner/sender address is provided, read their allowance
-  // for the router and warn if insufficient. We do NOT use `recipient` here
-  // because recipient is the output receiver, not the token owner/signer.
+  // for the router and ABORT if insufficient. This prevents the agent from
+  // signing & broadcasting a swap that will revert with STF (SafeTransferFrom
+  // failed) because the router has no approval to pull tokenIn.
   const swapWarnings: string[] = [];
   const swSepolia = sepoliaWarning(network);
   if (swSepolia) swapWarnings.push(swSepolia);
@@ -1061,6 +1064,9 @@ export async function buildSwap(
       const routerKey = provider === "merchant_moe" ? "lb_router_v2_2" : "swap_router";
       const routerAddress = getContractAddress(provider, routerKey, network);
       const client = d.getClient(network);
+      // Invariant: tokenIn is guaranteed to be an ERC-20 at this point.
+      // Native MNT inputs are rejected upstream by resolveToken() before reaching
+      // this block, so it is safe to call the ERC-20 `allowance(owner, spender)`.
       const allowance = await client.readContract({
         address: tokenIn.address as `0x${string}`,
         abi: ERC20_ABI,
@@ -1069,14 +1075,21 @@ export async function buildSwap(
       }) as bigint;
       if (allowance < amountInRaw) {
         const allowanceDecimal = formatUnits(allowance, tokenIn.decimals);
-        swapWarnings.push(
-          `INSUFFICIENT ALLOWANCE: ${tokenIn.symbol} allowance for ${provider} router is ${allowanceDecimal}, ` +
-          `but swap requires ${amountInDecimal}. Build an approve tx first: ` +
-          `mantle-cli approve --token ${tokenIn.symbol} --spender ${routerAddress} --amount ${amountInDecimal} --owner ${swapOwner} --json`
+        throw new MantleMcpError(
+          "INSUFFICIENT_ALLOWANCE",
+          `${tokenIn.symbol} allowance for ${provider} router (${routerAddress}) is ${allowanceDecimal}, ` +
+          `but this swap requires ${amountInDecimal}. The transaction would revert on-chain with STF (SafeTransferFrom failed).`,
+          `Approve the router first:\n` +
+          `  mantle_buildApprove({ token: "${tokenIn.symbol}", spender: "${routerAddress}", amount: "${amountInDecimal}", owner: "${swapOwner}" })\n` +
+          `Or via CLI:\n` +
+          `  mantle-cli approve --token ${tokenIn.symbol} --spender ${routerAddress} --amount ${amountInDecimal} --owner ${swapOwner}`,
+          { token: tokenIn.symbol, spender: routerAddress, required: amountInDecimal, current_allowance: allowanceDecimal, owner: swapOwner }
         );
       }
-    } catch {
-      // Non-critical — proceed without allowance check
+    } catch (err) {
+      // Re-throw our own INSUFFICIENT_ALLOWANCE error only; swallow unrelated RPC failures.
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_ALLOWANCE") throw err;
+      // Non-critical RPC failure — proceed without allowance check
     }
   }
 
@@ -1362,7 +1375,8 @@ function buildV3Swap(params: {
     },
     pool_params: {
       provider,
-      fee_tier: feeTier
+      fee_tier: feeTier,
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -1445,7 +1459,8 @@ function buildMoeSwap(params: {
     pool_params: {
       provider: "merchant_moe",
       bin_step: binStep,
-      router_version: routerVersion
+      router_version: routerVersion,
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -1520,7 +1535,8 @@ function buildV3MultihopSwap(params: {
     },
     pool_params: {
       provider,
-      fee_tier: route.fees[0] // primary leg fee tier
+      fee_tier: route.fees[0], // primary leg fee tier
+      router_address: routerAddress
     },
     warnings,
     built_at_utc: now
@@ -1722,7 +1738,77 @@ export async function buildAddLiquidity(
   const amountADecimal = formatUnits(amountARaw, tokenA.decimals);
   const amountBDecimal = formatUnits(amountBRaw, tokenB.decimals);
 
+  // Resolve the contract that needs ERC-20 approval:
+  //   V3 (agni/fluxion) → position manager
+  //   Merchant Moe LB   → LB router v2.2
+  const spenderKey = (provider === "agni" || provider === "fluxion")
+    ? "position_manager"
+    : "lb_router_v2_2";
+  const spenderAddress = getContractAddress(provider, spenderKey, network);
+
+  // Blocking allowance check (same pattern as buildSwap / cecb96a)
+  const lpOwner = typeof args.owner === "string" && isAddress(args.owner, { strict: false })
+    ? getAddress(args.owner)
+    : null;
+
+  if (lpOwner) {
+    try {
+      const client = d.getClient(network);
+      // Native MNT never reaches this block — resolveToken() upstream rejects the
+      // zero/native pseudo-address, so tokenA/tokenB are guaranteed to be ERC-20.
+      // Use allSettled so that a single non-standard-ERC20 rejection does NOT
+      // mask the other token's *known*-insufficient allowance (which would
+      // otherwise reopen the STF-revert path this throw is designed to close).
+      const settled = await Promise.allSettled([
+        client.readContract({
+          address: tokenA.address as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "allowance",
+          args: [lpOwner as `0x${string}`, spenderAddress as `0x${string}`]
+        }) as Promise<bigint>,
+        client.readContract({
+          address: tokenB.address as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "allowance",
+          args: [lpOwner as `0x${string}`, spenderAddress as `0x${string}`]
+        }) as Promise<bigint>
+      ]);
+
+      const tokens = [
+        { sym: tokenA.symbol, required: amountARaw, requiredDec: amountADecimal, decimals: tokenA.decimals, result: settled[0] },
+        { sym: tokenB.symbol, required: amountBRaw, requiredDec: amountBDecimal, decimals: tokenB.decimals, result: settled[1] }
+      ] as const;
+
+      for (const t of tokens) {
+        if (t.result.status === "rejected") {
+          warnings.push(
+            `Could not read ${t.sym} allowance (RPC error). Proceeding without blocking check — the swap may revert with STF if allowance is insufficient.`
+          );
+          continue;
+        }
+        const allowance = t.result.value;
+        if (allowance < t.required) {
+          const currentDec = formatUnits(allowance, t.decimals);
+          throw new MantleMcpError(
+            "INSUFFICIENT_ALLOWANCE",
+            `${t.sym} allowance for ${provider} (${spenderAddress}) is ${currentDec}, ` +
+            `but this add-liquidity requires ${t.requiredDec}. The transaction would revert on-chain with STF (SafeTransferFrom failed).`,
+            `Approve the spender first:\n` +
+            `  mantle_buildApprove({ token: "${t.sym}", spender: "${spenderAddress}", amount: "${t.requiredDec}", owner: "${lpOwner}" })\n` +
+            `Or via CLI:\n` +
+            `  mantle-cli approve --token ${t.sym} --spender ${spenderAddress} --amount ${t.requiredDec} --owner ${lpOwner}`,
+            { token: t.sym, spender: spenderAddress, required: t.requiredDec, current_allowance: currentDec, owner: lpOwner }
+          );
+        }
+      }
+    } catch (err) {
+      // Re-throw our own INSUFFICIENT_ALLOWANCE only; swallow unrelated RPC failures.
+      if (err instanceof MantleMcpError && err.code === "INSUFFICIENT_ALLOWANCE") throw err;
+    }
+  }
+
   if (provider === "agni" || provider === "fluxion") {
+    const usedFeeTier = typeof args.fee_tier === "number" ? args.fee_tier : 3000;
     const result = await buildV3AddLiquidity({
       provider,
       tokenA,
@@ -1735,16 +1821,22 @@ export async function buildAddLiquidity(
       recipient,
       deadline,
       network,
-      feeTier: typeof args.fee_tier === "number" ? args.fee_tier : 3000,
+      feeTier: usedFeeTier,
       tickLower: typeof args.tick_lower === "number" ? args.tick_lower : -887220,
       tickUpper: typeof args.tick_upper === "number" ? args.tick_upper : 887220,
       now: d.now()
     });
     result.warnings.push(...warnings);
+    result.pool_params = {
+      provider,
+      fee_tier: usedFeeTier,
+      router_address: spenderAddress
+    };
     return result;
   }
 
   // merchant_moe LB
+  const binStep = typeof args.bin_step === "number" ? args.bin_step : 25;
   const result = buildMoeAddLiquidity({
     tokenA,
     tokenB,
@@ -1756,7 +1848,7 @@ export async function buildAddLiquidity(
     recipient,
     deadline,
     network,
-    binStep: typeof args.bin_step === "number" ? args.bin_step : 25,
+    binStep,
     activeIdDesired:
       typeof args.active_id === "number" ? args.active_id : 8388608,
     idSlippage: typeof args.id_slippage === "number" ? args.id_slippage : 5,
@@ -1772,6 +1864,11 @@ export async function buildAddLiquidity(
     now: d.now()
   });
   result.warnings.push(...warnings);
+  result.pool_params = {
+    provider: "merchant_moe",
+    bin_step: binStep,
+    router_address: spenderAddress
+  };
   return result;
 }
 
@@ -2057,7 +2154,7 @@ export async function buildRemoveLiquidity(
         throw new MantleMcpError(
           "INVALID_INPUT",
           "Position has zero liquidity — nothing to remove.",
-          "Check position status with mantle_getV3Positions first.",
+          "Verify the position on https://agni.finance or Mantlescan (tx history for the NonfungiblePositionManager NFT).",
           { token_id: tokenIdInput.toString(), provider }
         );
       }
@@ -2089,6 +2186,13 @@ export async function buildRemoveLiquidity(
       now: d.now()
     });
     result.warnings.push(...warnings);
+    // V3 removeLiquidity is called on the NonfungiblePositionManager NFT owner path
+    // and requires no ERC-20 allowance — intentionally omit `router_address` so
+    // agents do not construct a spurious `mantle_buildApprove` against the position
+    // manager. The provider alone is sufficient context for callers.
+    result.pool_params = {
+      provider
+    };
     return result;
   }
 
@@ -2143,6 +2247,11 @@ export async function buildRemoveLiquidity(
     warnings: [
       "amountXMin and amountYMin are 0. Consider setting minimum outputs to avoid MEV."
     ],
+    pool_params: {
+      provider: "merchant_moe",
+      bin_step: binStep,
+      router_address: routerAddress
+    },
     built_at_utc: d.now()
   };
 }
@@ -3097,7 +3206,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildSwap: {
     name: "mantle_buildSwap",
     description:
-      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote to get expected output, provider, and resolved_pool_params\n2. Call mantle_buildApprove for token_in → router (if allowance insufficient)\n3. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, and quote_fee_tier/quote_provider from resolved_pool_params for cross-validation\n4. Sign and broadcast each unsigned_tx\n\nThe response includes pool_params showing the actual fee_tier/bin_step used — compare with your quote's resolved_pool_params to verify consistency.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...'",
+      "Build an unsigned swap transaction on a whitelisted DEX. Pool parameters (bin_step, fee_tier) are auto-discovered on-chain for the best liquidity pool.\n\nWORKFLOW:\n1. Call mantle_getSwapQuote → returns router_address, provider, and resolved_pool_params\n2. Call mantle_buildApprove: token=token_in, spender=router_address from step 1, amount=amount_in, owner=wallet_address. IMPORTANT: spender is the ROUTER address (e.g. 0x319B69… for Agni), NOT the token address.\n3. Sign and broadcast the approve unsigned_tx. Wait for confirmation.\n4. Call mantle_buildSwap with: provider from quote, amount_out_min from quote's minimum_out_raw, owner=wallet_address (triggers blocking allowance check), and quote_fee_tier/quote_provider for cross-validation\n5. Sign and broadcast the swap unsigned_tx\n\nIf owner is passed and allowance is insufficient, buildSwap will REJECT with INSUFFICIENT_ALLOWANCE (not just warn). The error includes the correct router_address to approve.\n\nThe response includes pool_params.router_address — this is the spender for approve.\n\nExamples:\n- Swap 100 USDC for USDT0 on Merchant Moe: provider='merchant_moe', token_in='USDC', token_out='USDT0', amount_in='100', recipient='0x...', owner='0x...'\n- Swap 10 WMNT for USDC on Agni: provider='agni', token_in='WMNT', token_out='USDC', amount_in='10', recipient='0x...', owner='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -3161,7 +3270,7 @@ export const defiWriteTools: Record<string, Tool> = {
         },
         owner: {
           type: "string",
-          description: "Wallet address that owns the input tokens (the signer). Used for optional allowance pre-check — emits a warning if allowance is insufficient."
+          description: "STRONGLY RECOMMENDED: Wallet address that owns the input tokens (the signer). Triggers a blocking allowance check — if allowance is insufficient, the call rejects with INSUFFICIENT_ALLOWANCE (includes the correct router_address to approve) instead of returning a swap tx that would revert on-chain."
         },
         nonce: {
           type: "number",
@@ -3176,7 +3285,12 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildAddLiquidity: {
     name: "mantle_buildAddLiquidity",
     description:
-      "Build an unsigned add-liquidity transaction. For V3 DEXes (agni/fluxion) mints an NFT position. For Merchant Moe LB adds to bin-based pools.\n\nAmount modes:\n- Token amounts: provide amount_a and amount_b directly\n- USD amount: provide amount_usd to auto-split 50/50 between tokens (fetches live prices)\n\nExamples:\n- Token mode: provider='agni', token_a='WMNT', token_b='USDC', amount_a='10', amount_b='8', recipient='0x...'\n- USD mode: provider='agni', token_a='WMNT', token_b='USDC', amount_usd=1000, recipient='0x...'",
+      "Build an unsigned add-liquidity transaction. For V3 DEXes (agni/fluxion) mints an NFT position. For Merchant Moe LB adds to bin-based pools.\n\n" +
+      "Amount modes:\n- Token amounts: provide amount_a and amount_b directly\n- USD amount: provide amount_usd to auto-split between tokens (fetches live prices; V3 uses pool-state-aware ratio)\n\n" +
+      "IMPORTANT: Pass 'owner' to enable a blocking allowance check. If either token's allowance is insufficient, " +
+      "the call rejects with INSUFFICIENT_ALLOWANCE and includes the correct spender address and a ready-to-use " +
+      "mantle_buildApprove invocation. The response always includes pool_params.router_address — the spender to approve.\n\n" +
+      "Examples:\n- Token mode: provider='agni', token_a='WMNT', token_b='USDC', amount_a='10', amount_b='8', recipient='0x...', owner='0x...'\n- USD mode: provider='agni', token_a='WMNT', token_b='USDC', amount_usd=1000, recipient='0x...', owner='0x...'",
     inputSchema: {
       type: "object",
       properties: {
@@ -3253,6 +3367,14 @@ export const defiWriteTools: Record<string, Tool> = {
         network: {
           type: "string",
           description: "Network: 'mainnet' (default) or 'sepolia'."
+        },
+        owner: {
+          type: "string",
+          description:
+            "STRONGLY RECOMMENDED: Wallet address that will sign the transaction. " +
+            "Triggers a blocking allowance check for both tokens — if either allowance is insufficient, " +
+            "the call rejects with INSUFFICIENT_ALLOWANCE (includes the correct spender address to approve) " +
+            "instead of returning a tx that would revert on-chain with STF."
         },
         nonce: {
           type: "number",
@@ -3336,7 +3458,11 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildAaveSupply: {
     name: "mantle_buildAaveSupply",
     description:
-      "Build an unsigned Aave V3 supply (deposit) transaction. Remember to approve the asset for the Pool contract first.\n\n" +
+      "Build an unsigned Aave V3 supply (deposit) transaction. This calls Pool.supply() which pulls tokens " +
+      "via transferFrom AND mints aTokens — the aToken balance is the ONLY on-chain record redeemable via withdraw. " +
+      "NEVER model 'supply' as a plain ERC-20 transfer() to the Pool address (0x458F293454fE0d67EC0655f3672301301DD51422) — " +
+      "that bypasses Pool accounting, mints NO aToken, and locks funds PERMANENTLY with no recovery path. " +
+      "Always use THIS tool for Aave supply operations. Remember to approve the asset for the Pool contract first.\n\n" +
       "IMPORTANT: Only USDT0 is supported on Aave V3 — NOT USDT. If the user holds USDT, swap USDT → USDT0 on Merchant Moe first.\n\n" +
       "ISOLATION MODE: WETH and WMNT are Isolation Mode assets. Supplying them as your ONLY collateral " +
       "restricts borrows to: USDC, USDT0, USDe, GHO. Other assets CANNOT be borrowed in Isolation Mode.\n\n" +
@@ -3554,7 +3680,7 @@ export const defiWriteTools: Record<string, Tool> = {
   mantle_buildCollectFees: {
     name: "mantle_buildCollectFees",
     description:
-      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Call mantle_getV3Positions to find positions with tokens_owed0/tokens_owed1 > 0\n2. Call mantle_buildCollectFees with the token_id\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...'",
+      "Build an unsigned transaction to collect accrued fees from a V3 LP position (Agni or Fluxion). Collects the maximum available fees for both tokens.\n\nWORKFLOW:\n1. Obtain the V3 NFT position token_id from a block explorer (Mantlescan), https://agni.finance, or the unsigned_tx response of a prior mantle_buildAddLiquidity call (mantle_getV3Positions is currently disabled — see the capability catalog).\n2. Call mantle_buildCollectFees with the token_id\n3. Sign and broadcast the unsigned_tx\n\nExamples:\n- Collect Agni fees: provider='agni', token_id='12345', recipient='0x...'\n- Collect Fluxion fees: provider='fluxion', token_id='67890', recipient='0x...'",
     inputSchema: {
       type: "object",
       properties: {

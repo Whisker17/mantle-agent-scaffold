@@ -500,6 +500,127 @@ interface PositionResult {
   in_range: boolean;
 }
 
+/**
+ * Discover token IDs owned by `owner` when ERC721Enumerable is unavailable.
+ *
+ * Strategy: query Transfer event logs where `to = owner`, deduplicate, then
+ * batch-verify current ownership via ownerOf. This handles tokens that were
+ * received and later transferred away.
+ *
+ * Many RPCs limit the block range for eth_getLogs (Mantle's public RPC
+ * commonly caps at ~100k blocks). We use a chunked approach, scanning
+ * backward from the chain tip to find events efficiently.
+ */
+/**
+ * NOTE: This scanner is currently unreachable because `mantle_getV3Positions`
+ * is disabled (see capability-catalog + defi-lp-read.ts registrations). It is
+ * retained as a reference implementation for the future re-enable; see the
+ * disabled-tool entry in capability-catalog.ts for the blocker (Agni's
+ * NonfungiblePositionManager lacks ERC721Enumerable and the event-scan fallback
+ * below is unreliable on Mantle public RPC). TODO(lp-v3-positions-reenable):
+ * gate behind a feature flag and add coverage before flipping the tool on.
+ */
+async function discoverTokenIdsByEvents(
+  client: ReturnType<typeof getPublicClient>,
+  positionManager: `0x${string}`,
+  owner: `0x${string}`,
+  maxPositions: number
+): Promise<{ ownedIds: bigint[]; warnings: string[] }> {
+  const warnings: string[] = [];
+  const latestBlock = await client.getBlockNumber();
+
+  // Scan backward in chunks. Most users' positions are recent, so
+  // scanning from the tip is fast and handles the common case in 1-2 RPCs.
+  const CHUNK_SIZE = 100_000n;
+  // Cap total scan depth to ~20M blocks (well beyond Mantle's full history)
+  const MIN_BLOCK = latestBlock > 20_000_000n ? latestBlock - 20_000_000n : 0n;
+  const MAX_RETRY_DEPTH = 3;
+
+  const candidateIds = new Set<bigint>();
+
+  // Recursive best-effort window scan: halves on RPC rejection up to
+  // MAX_RETRY_DEPTH levels (covers public RPCs that cap at 10k–50k blocks).
+  async function scanRange(
+    fromBlock: bigint,
+    toBlock: bigint,
+    depth: number
+  ): Promise<void> {
+    try {
+      const logs = await client.getContractEvents({
+        address: positionManager,
+        abi: V3_POSITION_MANAGER_ABI,
+        eventName: "Transfer",
+        args: { to: owner },
+        fromBlock,
+        toBlock
+      });
+      for (const log of logs) {
+        const tokenId = (log.args as { tokenId?: bigint }).tokenId;
+        if (tokenId != null) candidateIds.add(tokenId);
+      }
+    } catch {
+      const span = toBlock - fromBlock;
+      if (depth >= MAX_RETRY_DEPTH || span < 2n) {
+        warnings.push(
+          `Event-log scan failed for blocks ${fromBlock}-${toBlock} after ${depth} retry level(s); some historical positions may be missing.`
+        );
+        return;
+      }
+      const mid = fromBlock + span / 2n;
+      await scanRange(fromBlock, mid, depth + 1);
+      await scanRange(mid + 1n, toBlock, depth + 1);
+    }
+  }
+
+  let toBlock = latestBlock;
+  while (toBlock > MIN_BLOCK) {
+    // Clamp the final chunk's fromBlock to MIN_BLOCK instead of overscanning
+    // up to ~100k blocks below it. This was the F-4 bug (review 2026-04-16).
+    const fromBlock = toBlock > MIN_BLOCK + CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : MIN_BLOCK;
+    await scanRange(fromBlock, toBlock, 0);
+    if (fromBlock <= MIN_BLOCK) break;
+    toBlock = fromBlock - 1n;
+  }
+
+  if (candidateIds.size === 0) return { ownedIds: [], warnings };
+
+  // Batch-verify current ownership — tokens may have been transferred away.
+  // Candidates are truncated to maxPositions*2 to bound multicall size; this
+  // can silently drop currently-owned positions when a wallet has many more
+  // historical transfers than live positions. Emit a warning if we truncate.
+  const allCandidates = Array.from(candidateIds);
+  const sliceLimit = maxPositions * 2;
+  const idList = allCandidates.slice(0, sliceLimit);
+  if (allCandidates.length > sliceLimit) {
+    warnings.push(
+      `Candidate token IDs truncated from ${allCandidates.length} to ${sliceLimit} (maxPositions*2). Old positions may be missing; raise maxPositions to widen the window.`
+    );
+  }
+  const ownerOfCalls = idList.map((id) => ({
+    address: positionManager,
+    abi: V3_POSITION_MANAGER_ABI,
+    functionName: "ownerOf" as const,
+    args: [id] as const
+  }));
+
+  const ownerOfResults = await client.multicall({ contracts: ownerOfCalls });
+
+  const ownedIds: bigint[] = [];
+  const ownerLower = owner.toLowerCase();
+  for (let i = 0; i < ownerOfResults.length && ownedIds.length < maxPositions; i++) {
+    const res = ownerOfResults[i];
+    if (
+      res.status === "success" &&
+      typeof res.result === "string" &&
+      res.result.toLowerCase() === ownerLower
+    ) {
+      ownedIds.push(idList[i]);
+    }
+  }
+
+  return { ownedIds, warnings };
+}
+
 async function readPositionsForProvider(
   provider: V3Provider,
   owner: `0x${string}`,
@@ -526,7 +647,12 @@ async function readPositionsForProvider(
 
   const cappedCount = Math.min(count, MAX_POSITIONS_PER_PROVIDER);
 
-  // Step 2: Get all token IDs via multicall
+  // Step 2: Get all token IDs
+  // Try ERC721Enumerable first (tokenOfOwnerByIndex). Agni and some V3
+  // forks do NOT implement Enumerable, so every multicall entry will fail.
+  // When that happens, fall back to Transfer event log scanning.
+  let tokenIds: bigint[] = [];
+
   const indexCalls = Array.from({ length: cappedCount }, (_, i) => ({
     address: positionManager,
     abi: V3_POSITION_MANAGER_ABI,
@@ -536,11 +662,21 @@ async function readPositionsForProvider(
 
   const indexResults = await client.multicall({ contracts: indexCalls });
 
-  const tokenIds: bigint[] = [];
   for (const res of indexResults) {
     if (res.status === "success") {
       tokenIds.push(res.result as bigint);
     }
+  }
+
+  // Fallback: if Enumerable is unsupported, discover token IDs from
+  // Transfer event logs and verify current ownership via ownerOf.
+  if (tokenIds.length === 0 && count > 0) {
+    const scan = await discoverTokenIdsByEvents(client, positionManager, owner, cappedCount);
+    tokenIds = scan.ownedIds;
+    // NOTE: scan.warnings are currently dropped because this tool is disabled.
+    // When re-enabling mantle_getV3Positions, plumb warnings up to the caller
+    // (readPositionsForProvider → its consumer) so truncation and partial
+    // log-scan failures surface to agents.
   }
 
   if (tokenIds.length === 0) return [];
@@ -1251,6 +1387,16 @@ interface FoundPool {
   fee_tier?: number;
   bin_step?: number;
   liquidity_raw: string;
+  /**
+   * Units for `liquidity_raw`. Callers MUST NOT compare `liquidity_raw` across
+   * different `liquidity_unit` values — V3 virtual liquidity and LB raw
+   * reserves are not dimensionally compatible.
+   *   - "v3_virtual_liquidity": Uniswap V3 `pool.liquidity()` (unitless, ~sqrt(xy))
+   *   - "lb_active_bin_native_mixed": Merchant Moe active-bin (reserveX + reserveY)
+   *     summed in native token decimals — mixed across tokens (e.g. USDC@6 + WMNT@18).
+   *     Useful only as "is there any liquidity" / sort-within-provider.
+   */
+  liquidity_unit?: "v3_virtual_liquidity" | "lb_active_bin_native_mixed";
   has_liquidity: boolean;
 }
 
@@ -1321,6 +1467,7 @@ async function findPools(
           pool_address: liquidityCalls[i].poolAddress,
           fee_tier: liquidityCalls[i].fee,
           liquidity_raw: liquidity.toString(),
+          liquidity_unit: "v3_virtual_liquidity",
           has_liquidity: liquidity > 0n
         });
       }
@@ -1345,33 +1492,89 @@ async function findPools(
 
     const moeResults = await client.multicall({ contracts: moeCalls });
 
+    // Collect live LB pairs from factory results
+    interface LBPairHit {
+      binStep: number;
+      pairAddress: `0x${string}`;
+    }
+    const lbPairs: LBPairHit[] = [];
     for (let i = 0; i < LB_BIN_STEPS.length; i++) {
       const result = moeResults[i];
       if (result.status === "success" && result.result) {
         const info = result.result as { binStep: number; LBPair: string; createdByOwner: boolean; ignoredForRouting: boolean };
         if (info.LBPair && info.LBPair !== ZERO_ADDR) {
-          // Read active bin to confirm the pair is live
-          let hasLiquidity = false;
-          try {
-            const activeId = await client.readContract({
-              address: info.LBPair as `0x${string}`,
-              abi: LB_PAIR_ABI,
-              functionName: "getActiveId"
-            });
-            hasLiquidity = typeof activeId === "number" && activeId > 0;
-          } catch {
-            hasLiquidity = false;
-          }
-
-          pools.push({
-            provider: "merchant_moe",
-            pool_address: info.LBPair,
-            bin_step: LB_BIN_STEPS[i],
-            liquidity_raw: "0", // LB pairs don't have a single liquidity number
-            has_liquidity: hasLiquidity
+          lbPairs.push({
+            binStep: LB_BIN_STEPS[i],
+            pairAddress: info.LBPair as `0x${string}`
           });
         }
       }
+    }
+
+    // Batch-read active bin IDs
+    const activeIdResults = lbPairs.length > 0
+      ? await client.multicall({
+          contracts: lbPairs.map((p) => ({
+            address: p.pairAddress,
+            abi: LB_PAIR_ABI,
+            functionName: "getActiveId" as const
+          }))
+        })
+      : [];
+
+    // For pairs with a valid activeId, batch-read active bin reserves.
+    // The active bin's (reserveX + reserveY) is the closest analogue to
+    // V3's in-range liquidity() — both describe the liquidity available at
+    // the current price. Units are mixed (native decimals of tokenX/Y),
+    // but that's already true of V3's virtual `liquidity` value, so this
+    // yields a comparable rough indicator for ranking/filtering.
+    const binCallIndex: Array<{ pairIdx: number; activeId: number }> = [];
+    const binCalls: Array<{
+      address: `0x${string}`;
+      abi: typeof LB_PAIR_ABI;
+      functionName: "getBin";
+      args: readonly [number];
+    }> = [];
+    for (let i = 0; i < lbPairs.length; i++) {
+      const r = activeIdResults[i];
+      if (r && r.status === "success" && typeof r.result === "number" && r.result > 0) {
+        binCallIndex.push({ pairIdx: i, activeId: r.result });
+        binCalls.push({
+          address: lbPairs[i].pairAddress,
+          abi: LB_PAIR_ABI,
+          functionName: "getBin",
+          args: [r.result] as const
+        });
+      }
+    }
+
+    const binResults = binCalls.length > 0
+      ? await client.multicall({ contracts: binCalls })
+      : [];
+
+    // Map active-bin reserves back to each pair (default: zero = dead)
+    const liquidityByPair = new Map<number, bigint>();
+    for (let k = 0; k < binCallIndex.length; k++) {
+      const r = binResults[k];
+      if (r && r.status === "success" && r.result) {
+        const [binReserveX, binReserveY] = r.result as readonly [bigint, bigint];
+        liquidityByPair.set(
+          binCallIndex[k].pairIdx,
+          BigInt(binReserveX) + BigInt(binReserveY)
+        );
+      }
+    }
+
+    for (let i = 0; i < lbPairs.length; i++) {
+      const liquidity = liquidityByPair.get(i) ?? 0n;
+      pools.push({
+        provider: "merchant_moe",
+        pool_address: lbPairs[i].pairAddress,
+        bin_step: lbPairs[i].binStep,
+        liquidity_raw: liquidity.toString(),
+        liquidity_unit: "lb_active_bin_native_mixed",
+        has_liquidity: liquidity > 0n
+      });
     }
   }
 
@@ -2301,36 +2504,17 @@ export const defiLpReadTools: Record<string, Tool> = {
     handler: getLBPairState
   },
 
-  mantle_getV3Positions: {
-    name: "mantle_getV3Positions",
-    description:
-      "Enumerate all V3 LP positions for a wallet across Agni Finance and Fluxion on Mantle. Returns token IDs, tick ranges, liquidity, uncollected fees, and whether each position is in-range.\n\nBy default filters out zero-liquidity, zero-fees positions (set include_empty=true to show all).\n\nExamples:\n- All positions: owner='<wallet_address>'\n- Agni only: owner='<wallet_address>', provider='agni'\n- Include empty: owner='<wallet_address>', include_empty=true",
-    inputSchema: {
-      type: "object",
-      properties: {
-        owner: {
-          type: "string",
-          description: "Wallet address to enumerate LP positions for."
-        },
-        provider: {
-          type: "string",
-          description:
-            "Optional filter: 'agni' or 'fluxion'. Omit to scan both."
-        },
-        include_empty: {
-          type: "boolean",
-          description:
-            "Include zero-liquidity and zero-fees positions (default: false)."
-        },
-        network: {
-          type: "string",
-          description: "Network: 'mainnet' (default) or 'sepolia'."
-        }
-      },
-      required: ["owner"]
-    },
-    handler: getV3Positions
-  },
+  // mantle_getV3Positions: TEMPORARILY DISABLED
+  // Agni's NonfungiblePositionManager does not implement ERC721Enumerable
+  // (no tokenOfOwnerByIndex). The event-based fallback also fails due to
+  // Mantle RPC block-range limits. Re-enable once a reliable enumeration
+  // strategy is implemented (subgraph, or paginated event scanning).
+  //
+  // mantle_getV3Positions: {
+  //   name: "mantle_getV3Positions",
+  //   ...
+  //   handler: getV3Positions
+  // },
 
   mantle_suggestTickRange: {
     name: "mantle_suggestTickRange",
@@ -2456,61 +2640,8 @@ export const defiLpReadTools: Record<string, Tool> = {
     handler: findPools
   },
 
-  mantle_discoverTopPools: {
-    name: "mantle_discoverTopPools",
-    description:
-      "[TOP POOLS] Discover the best LP opportunities across ALL Mantle DEXes. " +
-      "No token pair required — scans the entire Mantle DeFi ecosystem.\n\n" +
-      "How it works:\n" +
-      "1. Queries DexScreener for pools paired with major tokens (WMNT, USDC, USDT0, WETH, mETH, USDT, USDe) to discover ALL active pools including meme tokens.\n" +
-      "2. Also includes all pools from the known registry.\n" +
-      "3. Fetches real-time TVL, 24h volume, and price data for every pool.\n" +
-      "4. Calculates fee APR = (24h_volume × fee_rate × 365 / TVL).\n" +
-      "5. Returns a ranked list.\n\n" +
-      "Use this tool when the user asks:\n" +
-      '- "What are the best pools for LP?"\n' +
-      '- "Which pools have the highest APR?"\n' +
-      '- "Show me top volume pools on Mantle"\n' +
-      '- "Where should I provide liquidity?"\n' +
-      '- "Find high yield LP opportunities"\n\n' +
-      "Sort options: 'volume' (default), 'apr', 'tvl'\n\n" +
-      "Examples:\n" +
-      "- Top 20 by volume: {} (no args needed)\n" +
-      "- Top 10 by APR: sort_by='apr', limit=10\n" +
-      "- Fluxion only, min $50k TVL: provider='fluxion', min_tvl_usd=50000\n" +
-      "- Top Agni pools: provider='agni', sort_by='apr'",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sort_by: {
-          type: "string",
-          description:
-            "Sort metric: 'volume' (default — highest 24h trading volume), 'apr' (highest estimated fee APR), or 'tvl' (deepest liquidity)."
-        },
-        min_tvl_usd: {
-          type: "number",
-          description:
-            "Minimum TVL in USD to include (default: 0). Use to filter out illiquid pools. Recommended: 10000 for meaningful LP."
-        },
-        limit: {
-          type: "number",
-          description:
-            "Max pools to return (default: 20, max: 50)."
-        },
-        provider: {
-          type: "string",
-          description:
-            "Filter by DEX: 'agni', 'fluxion', or 'merchant_moe'. Omit to scan all."
-        },
-        network: {
-          type: "string",
-          description: "Network: 'mainnet' (default) or 'sepolia'."
-        }
-      },
-      required: []
-    },
-    handler: discoverTopPools
-  },
+  // mantle_discoverTopPools — temporarily disabled (DexScreener rate-limit issues)
+  // Re-enable once rate-limit / retry logic is hardened.
 
   mantle_getLBPositions: {
     name: "mantle_getLBPositions",

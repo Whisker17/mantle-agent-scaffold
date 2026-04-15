@@ -352,7 +352,7 @@ export const V3_POSITION_MANAGER_ABI = [
     ],
     outputs: []
   },
-  // ---- ERC721Enumerable (for position enumeration) ----
+  // ---- ERC721 / ERC721Enumerable (for position enumeration) ----
   {
     type: "function",
     name: "balanceOf",
@@ -369,5 +369,22 @@ export const V3_POSITION_MANAGER_ABI = [
       { name: "index", type: "uint256" }
     ],
     outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "ownerOf",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "address" }]
+  },
+  // ---- ERC721 Transfer event (fallback enumeration via logs) ----
+  {
+    type: "event",
+    name: "Transfer",
+    inputs: [
+      { name: "from", type: "address", indexed: true },
+      { name: "to", type: "address", indexed: true },
+      { name: "tokenId", type: "uint256", indexed: true }
+    ]
   }
 ] as const;
