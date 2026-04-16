@@ -614,41 +614,53 @@ describe("defi read tools", () => {
     expect(result.warnings.join(" ")).toContain("conflict");
   });
 
-  it("scans and ranks MNT/mETH pool opportunities without confusing token mapping", async () => {
+  it("scans and ranks WMNT/USDT pool opportunities from local registry with live enrichment", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input).toLowerCase();
-      if (url.includes("api.dexscreener.com/token-pairs/v1/mantle/0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8")) {
+      // Mock per-pool enrichment calls
+      if (url.includes("latest/dex/pairs/mantle/0x365722f12ceb2063286a268b03c654df81b7c00f")) {
         return new Response(
-          JSON.stringify([
-            {
-              dexId: "agni",
-              pairAddress: "0x6488f911c6Cd86c289aa319C5A826Dcf8F1cA065",
-              baseToken: {
-                address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
-                symbol: "WMNT"
-              },
-              quoteToken: {
-                address: "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
-                symbol: "mETH"
-              },
-              liquidity: { usd: 1000000 },
-              volume: { h24: 100000 }
-            },
-            {
-              dexId: "merchantmoe",
-              pairAddress: "0x48C1A89af1102Cad358549e9Bb16aE5f96CddFEc",
-              baseToken: {
-                address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
-                symbol: "WMNT"
-              },
-              quoteToken: {
-                address: "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
-                symbol: "mETH"
-              },
-              liquidity: { usd: 600000 },
-              volume: { h24: 250000 }
-            }
-          ]),
+          JSON.stringify({
+            pairs: [
+              {
+                dexId: "merchantmoe",
+                pairAddress: "0x365722f12ceb2063286A268B03c654Df81B7C00F",
+                baseToken: {
+                  address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
+                  symbol: "WMNT"
+                },
+                quoteToken: {
+                  address: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
+                  symbol: "USDT"
+                },
+                liquidity: { usd: 1200000 },
+                volume: { h24: 35000 }
+              }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("latest/dex/pairs/mantle/0xf6c9020c9e915808481757779edb53dacaee2415")) {
+        return new Response(
+          JSON.stringify({
+            pairs: [
+              {
+                dexId: "merchantmoe",
+                pairAddress: "0xf6C9020c9E915808481757779EDB53DACEaE2415",
+                baseToken: {
+                  address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
+                  symbol: "WMNT"
+                },
+                quoteToken: {
+                  address: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
+                  symbol: "USDT"
+                },
+                liquidity: { usd: 19000 },
+                volume: { h24: 5000 }
+              }
+            ]
+          }),
           { status: 200 }
         );
       }
@@ -656,16 +668,19 @@ describe("defi read tools", () => {
     });
 
     const result = await getPoolOpportunities({
-      token_a: "MNT",
-      token_b: "mETH",
-      provider: "all",
+      token_a: "WMNT",
+      token_b: "USDT",
+      provider: "merchant_moe",
       network: "mainnet"
     });
 
     expect(result.intent).toBe("pool_opportunity_scan");
-    expect(result.token_a.symbol).toBe("MNT");
-    expect(result.token_b.symbol).toBe("mETH");
-    expect(result.candidates).toHaveLength(2);
-    expect(result.candidates[0].provider).toBe("agni");
+    expect(result.token_a.symbol).toBe("WMNT");
+    expect(result.token_b.symbol).toBe("USDT");
+    expect(result.candidates.length).toBeGreaterThanOrEqual(2);
+    expect(result.candidates[0].provider).toBe("merchant_moe");
+    // Verify enrichment: live data should override static liquidity
+    expect(result.candidates[0].liquidity_usd).toBe(1200000);
+    expect(result.candidates[0].volume_24h_usd).toBe(35000);
   });
 });

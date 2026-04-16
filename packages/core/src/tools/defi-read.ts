@@ -10,6 +10,8 @@ import { AAVE_V3_POOL_ABI } from "../lib/abis/aave-v3-pool.js";
 import { V3_QUOTER_V2_ABI } from "../lib/abis/uniswap-v3.js";
 import { LB_QUOTER_ABI } from "../lib/abis/merchant-moe-lb.js";
 import { discoverBestV3Pool } from "../lib/pool-discovery.js";
+import { listAllPairs } from "../config/dex-pairs.js";
+import dexscreenerPoolsJson from "../config/dexscreener-pools.json" with { type: "json" };
 
 interface SwapQuoteDeps {
   resolveTokenInput: (
@@ -112,10 +114,6 @@ interface PoolOpportunitiesDeps {
     token: string,
     network?: "mainnet" | "sepolia"
   ) => Promise<ResolvedTokenInput> | ResolvedTokenInput;
-  getTokenPairs: (
-    network: "mainnet" | "sepolia",
-    tokenAddress: string
-  ) => Promise<DexScreenerPair[]>;
   now: () => string;
 }
 
@@ -510,6 +508,82 @@ async function fetchDexScreenerTokenPairs(
     `${DEXSCREENER_API_BASE}/token-pairs/v1/${chainId}/${tokenAddress}`
   );
   return Array.isArray(payload) ? (payload as DexScreenerPair[]) : [];
+}
+
+// ---------------------------------------------------------------------------
+// Local pool registry fallback (dex-pairs.ts + dexscreener-pools.json)
+// ---------------------------------------------------------------------------
+
+interface DexScreenerPoolEntry {
+  provider: string;
+  pool: string;
+  baseToken: { symbol: string; address: string };
+  quoteToken: { symbol: string; address: string };
+  liquidityUsd?: number;
+  binStep?: number;
+  feeTier?: number;
+  version?: number;
+  routerVersion?: number;
+  poolType?: string;
+}
+
+function loadDexScreenerPoolsJson(): DexScreenerPoolEntry[] {
+  const raw = dexscreenerPoolsJson as { pools?: DexScreenerPoolEntry[] };
+  return Array.isArray(raw.pools) ? raw.pools : [];
+}
+
+function providerToDexIdForFallback(provider: string): string | null {
+  if (provider === "agni") return "agni";
+  if (provider === "merchant_moe") return "merchantmoe";
+  if (provider === "fluxion") return "0xf883162ed9c7e8ef604214c964c678e40c9b737c";
+  return null;
+}
+
+/**
+ * Build DexScreenerPair-compatible entries from the local dex-pairs.ts registry,
+ * enriched with liquidity data from dexscreener-pools.json.
+ * Used as a fallback when the live DexScreener API returns no results.
+ */
+function getLocalPoolCandidates(tokenAddress: string): DexScreenerPair[] {
+  const normalizedToken = tokenAddress.toLowerCase();
+  const allPairs = listAllPairs();
+  const dexPools = loadDexScreenerPoolsJson();
+
+  // Build a map from pool address → liquidityUsd for enrichment
+  const liquidityByPool = new Map<string, number>();
+  for (const entry of dexPools) {
+    if (entry.pool && entry.liquidityUsd != null) {
+      liquidityByPool.set(entry.pool.toLowerCase(), entry.liquidityUsd);
+    }
+  }
+
+  // Filter pairs that involve the target token
+  const matching = allPairs.filter((p) => {
+    return (
+      p.tokenAAddress.toLowerCase() === normalizedToken ||
+      p.tokenBAddress.toLowerCase() === normalizedToken
+    );
+  });
+
+  // Convert to DexScreenerPair format
+  return matching.map((p) => {
+    const dexId = providerToDexIdForFallback(p.provider);
+    const liquidityUsd = liquidityByPool.get(p.pool.toLowerCase()) ?? null;
+    return {
+      dexId: dexId ?? p.provider,
+      pairAddress: p.pool,
+      baseToken: {
+        address: p.tokenAAddress,
+        symbol: p.tokenA
+      },
+      quoteToken: {
+        address: p.tokenBAddress,
+        symbol: p.tokenB
+      },
+      liquidity: { usd: liquidityUsd },
+      volume: { h24: null }
+    } as DexScreenerPair;
+  });
 }
 
 async function fetchDexScreenerPairByAddress(
@@ -1228,7 +1302,6 @@ const defaultPoolDeps: PoolLiquidityDeps = {
 
 const defaultPoolOpportunityDeps: PoolOpportunitiesDeps = {
   resolveTokenInput: (token, network) => resolveTokenInputFromRegistry(token, network ?? "mainnet"),
-  getTokenPairs: fetchDexScreenerTokenPairs,
   now: () => new Date().toISOString()
 };
 
@@ -2008,19 +2081,15 @@ export async function getPoolOpportunities(
     );
   }
 
-  const pairs = await resolvedDeps.getTokenPairs(network, tokenAAddress);
   const sourceTrace: SourceTraceEntry[] = [];
 
-  const candidates = pairs
+  // ---- Step 1: Build candidates from local pool registry (instant) ----
+  const localPairs = getLocalPoolCandidates(tokenAAddress);
+  const candidates = localPairs
     .filter((pair) => {
       const provider = dexIdToProvider(pair.dexId);
-      if (!provider) {
-        return false;
-      }
-      if (providerSelection !== "all" && provider !== providerSelection) {
-        return false;
-      }
-
+      if (!provider) return false;
+      if (providerSelection !== "all" && provider !== providerSelection) return false;
       const base = pair.baseToken?.address ?? null;
       const quote = pair.quoteToken?.address ?? null;
       return (
@@ -2035,29 +2104,22 @@ export async function getPoolOpportunities(
           ? getAddress(pair.pairAddress)
           : null;
       const liquidityUsd = asFiniteNumber(pair.liquidity?.usd);
-      const volume24h = asFiniteNumber(pair.volume?.h24);
       return {
         provider,
         pool_address: poolAddress,
         dex_id: pair.dexId ?? "unknown",
         liquidity_usd: liquidityUsd,
-        volume_24h_usd: volume24h
+        volume_24h_usd: null as number | null
       };
     })
     .filter((item) => item.pool_address !== null);
 
-  if (candidates.length > 0) {
+  if (candidates.length === 0) {
     sourceTrace.push({
-      source: "dexscreener",
-      tier: 1,
-      status: "success"
-    });
-  } else {
-    sourceTrace.push({
-      source: "dexscreener",
+      source: "local_registry",
       tier: 1,
       status: "empty",
-      reason: "no matching pools found for token pair"
+      reason: "no matching pools in local registry"
     });
     throw new MantleMcpError(
       "NO_ROUTE",
@@ -2071,6 +2133,41 @@ export async function getPoolOpportunities(
       }
     );
   }
+
+  sourceTrace.push({
+    source: "local_registry",
+    tier: 1,
+    status: "success"
+  });
+
+  // ---- Step 2: Enrich with live DexScreener data (best-effort) ----
+  const enrichResults = await Promise.allSettled(
+    candidates.map(async (candidate) => {
+      if (!candidate.pool_address) return null;
+      const livePair = await fetchDexScreenerPairByAddress(network, candidate.pool_address);
+      return livePair
+        ? { pool: candidate.pool_address, liquidity: livePair.liquidity, volume: livePair.volume }
+        : null;
+    })
+  );
+
+  let enrichedCount = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const result = enrichResults[i];
+    if (result.status === "fulfilled" && result.value) {
+      const live = result.value;
+      candidates[i].liquidity_usd = asFiniteNumber(live.liquidity?.usd) ?? candidates[i].liquidity_usd;
+      candidates[i].volume_24h_usd = asFiniteNumber(live.volume?.h24) ?? candidates[i].volume_24h_usd;
+      enrichedCount++;
+    }
+  }
+
+  sourceTrace.push({
+    source: "dexscreener",
+    tier: 2,
+    status: enrichedCount > 0 ? "success" : "empty",
+    reason: enrichedCount > 0 ? undefined : "live enrichment unavailable"
+  });
 
   const maxLiquidity = Math.max(...candidates.map((item) => item.liquidity_usd ?? 0), 0);
   const maxVolume = Math.max(...candidates.map((item) => item.volume_24h_usd ?? 0), 0);

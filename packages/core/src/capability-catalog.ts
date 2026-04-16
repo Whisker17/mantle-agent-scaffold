@@ -269,8 +269,8 @@ const CAPABILITIES: CapabilityEntry[] = [
     mutates: false,
     auth: "none",
     summary: "Read on-chain state of a Merchant Moe Liquidity Book pair: active bin, reserves, nearby bins.",
-    cli_command: "mantle-cli defi lb-state --token-a <token> --token-b <token> --bin-step <step> --json",
-    example: "{ \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"bin_step\": 25 }",
+    cli_command: "mantle-cli defi lb-state --pair <address> --json  OR  mantle-cli defi lb-state --token-a <token> --token-b <token> --bin-step <step> --json",
+    example: "{ \"pair_address\": \"0x365722f12ceb2063286A268B03c654Df81B7C00F\" }  OR  { \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"bin_step\": 25 }",
     tags: ["pool", "LB", "Merchant Moe", "bin", "state"]
   },
 
@@ -282,8 +282,8 @@ const CAPABILITIES: CapabilityEntry[] = [
     mutates: false,
     auth: "none",
     summary: "Read on-chain state of a Uniswap V3 pool (Agni/Fluxion): sqrtPriceX96, current tick, liquidity, prices.",
-    cli_command: "mantle-cli lp pool-state --token-a <token> --token-b <token> --fee-tier <tier> --provider <dex> --json",
-    example: "{ \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"fee_tier\": 3000, \"provider\": \"agni\" }",
+    cli_command: "mantle-cli lp pool-state --pool <address> --json  OR  mantle-cli lp pool-state --token-a <token> --token-b <token> --fee-tier <tier> --provider <dex> --json",
+    example: "{ \"pool_address\": \"0xeAfc4D6d4c3391Cd4Fc10c85D2f5f972d58C0dD5\" }  OR  { \"token_a\": \"WMNT\", \"token_b\": \"USDC\", \"fee_tier\": 3000, \"provider\": \"agni\" }",
     tags: ["pool", "V3", "state", "tick", "price"]
   },
   {
