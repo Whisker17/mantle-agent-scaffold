@@ -517,16 +517,9 @@ interface PositionResult {
  *
  * Many RPCs limit the block range for eth_getLogs (Mantle's public RPC
  * commonly caps at ~100k blocks). We use a chunked approach, scanning
- * backward from the chain tip to find events efficiently.
- */
-/**
- * NOTE: This scanner is currently unreachable because `mantle_getV3Positions`
- * is disabled (see capability-catalog + defi-lp-read.ts registrations). It is
- * retained as a reference implementation for the future re-enable; see the
- * disabled-tool entry in capability-catalog.ts for the blocker (Agni's
- * NonfungiblePositionManager lacks ERC721Enumerable and the event-scan fallback
- * below is unreliable on Mantle public RPC). TODO(lp-v3-positions-reenable):
- * gate behind a feature flag and add coverage before flipping the tool on.
+ * backward from the chain tip to find events efficiently. Failures on a
+ * given chunk are recorded as warnings and surfaced to the caller via
+ * `readPositionsForProvider` so partial scans are visible to the agent.
  */
 async function discoverTokenIdsByEvents(
   client: ReturnType<typeof getPublicClient>,
@@ -545,6 +538,9 @@ async function discoverTokenIdsByEvents(
   const MAX_RETRY_DEPTH = 3;
 
   const candidateIds = new Set<bigint>();
+  // Matches the downstream `sliceLimit = maxPositions * 2` cap — once we have
+  // this many candidate IDs, further scanning cannot affect the verified set.
+  const earlyExitThreshold = maxPositions * 2;
 
   // Recursive best-effort window scan: halves on RPC rejection up to
   // MAX_RETRY_DEPTH levels (covers public RPCs that cap at 10k–50k blocks).
@@ -586,6 +582,10 @@ async function discoverTokenIdsByEvents(
     // up to ~100k blocks below it. This was the F-4 bug (review 2026-04-16).
     const fromBlock = toBlock > MIN_BLOCK + CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : MIN_BLOCK;
     await scanRange(fromBlock, toBlock, 0);
+    // Stop once we have enough candidates for the verification step — extra
+    // chunks cannot affect the final `ownedIds` since they are discarded by
+    // the `sliceLimit` slice below.
+    if (candidateIds.size >= earlyExitThreshold) break;
     if (fromBlock <= MIN_BLOCK) break;
     toBlock = fromBlock - 1n;
   }
@@ -593,15 +593,15 @@ async function discoverTokenIdsByEvents(
   if (candidateIds.size === 0) return { ownedIds: [], warnings };
 
   // Batch-verify current ownership — tokens may have been transferred away.
-  // Candidates are truncated to maxPositions*2 to bound multicall size; this
-  // can silently drop currently-owned positions when a wallet has many more
-  // historical transfers than live positions. Emit a warning if we truncate.
+  // Candidates are truncated to maxPositions*2 (earlyExitThreshold) to bound
+  // multicall size; this can silently drop currently-owned positions when a
+  // wallet has many more historical transfers than live positions. Emit a
+  // warning if we truncate.
   const allCandidates = Array.from(candidateIds);
-  const sliceLimit = maxPositions * 2;
-  const idList = allCandidates.slice(0, sliceLimit);
-  if (allCandidates.length > sliceLimit) {
+  const idList = allCandidates.slice(0, earlyExitThreshold);
+  if (allCandidates.length > earlyExitThreshold) {
     warnings.push(
-      `Candidate token IDs truncated from ${allCandidates.length} to ${sliceLimit} (maxPositions*2). Old positions may be missing; raise maxPositions to widen the window.`
+      `Candidate token IDs truncated from ${allCandidates.length} to ${earlyExitThreshold} (maxPositions*2). Old positions may be missing; raise maxPositions to widen the window.`
     );
   }
   const ownerOfCalls = idList.map((id) => ({
@@ -634,7 +634,8 @@ async function readPositionsForProvider(
   owner: `0x${string}`,
   network: Network,
   includeEmpty: boolean
-): Promise<PositionResult[]> {
+): Promise<{ positions: PositionResult[]; warnings: string[] }> {
+  const warnings: string[] = [];
   const client = getPublicClient(network);
   const positionManager = getContractAddress(
     provider,
@@ -651,9 +652,14 @@ async function readPositionsForProvider(
   });
 
   const count = Number(balance);
-  if (count === 0) return [];
+  if (count === 0) return { positions: [], warnings };
 
   const cappedCount = Math.min(count, MAX_POSITIONS_PER_PROVIDER);
+  if (count > MAX_POSITIONS_PER_PROVIDER) {
+    warnings.push(
+      `Wallet holds ${count} ${provider} position NFTs, capped to ${MAX_POSITIONS_PER_PROVIDER}.`
+    );
+  }
 
   // Step 2: Get all token IDs
   // Try ERC721Enumerable first (tokenOfOwnerByIndex). Agni and some V3
@@ -681,13 +687,10 @@ async function readPositionsForProvider(
   if (tokenIds.length === 0 && count > 0) {
     const scan = await discoverTokenIdsByEvents(client, positionManager, owner, cappedCount);
     tokenIds = scan.ownedIds;
-    // NOTE: scan.warnings are currently dropped because this tool is disabled.
-    // When re-enabling mantle_getV3Positions, plumb warnings up to the caller
-    // (readPositionsForProvider → its consumer) so truncation and partial
-    // log-scan failures surface to agents.
+    for (const w of scan.warnings) warnings.push(w);
   }
 
-  if (tokenIds.length === 0) return [];
+  if (tokenIds.length === 0) return { positions: [], warnings };
 
   // Step 3: Read all positions via multicall
   const positionCalls = tokenIds.map((tokenId) => ({
@@ -753,7 +756,7 @@ async function readPositionsForProvider(
     });
   }
 
-  if (rawPositions.length === 0) return [];
+  if (rawPositions.length === 0) return { positions: [], warnings };
 
   // Step 5: Resolve pool addresses and read current ticks
   const factoryAddress = getContractAddress(provider, "factory", network);
@@ -855,7 +858,7 @@ async function readPositionsForProvider(
     };
   });
 
-  return positions;
+  return { positions, warnings };
 }
 
 export async function getV3Positions(
@@ -882,6 +885,7 @@ export async function getV3Positions(
   }
 
   const allPositions: PositionResult[] = [];
+  const allWarnings: Array<{ provider: string; warning: string }> = [];
   const errors: Array<{ provider: string; error: string }> = [];
 
   // Scan each provider
@@ -892,7 +896,10 @@ export async function getV3Positions(
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     if (result.status === "fulfilled") {
-      allPositions.push(...result.value);
+      allPositions.push(...result.value.positions);
+      for (const w of result.value.warnings) {
+        allWarnings.push({ provider: providers[i], warning: w });
+      }
     } else {
       errors.push({
         provider: providers[i],
@@ -910,6 +917,7 @@ export async function getV3Positions(
     total_positions: allPositions.length,
     positions: allPositions,
     errors: errors.length > 0 ? errors : undefined,
+    warnings: allWarnings.length > 0 ? allWarnings : undefined,
     include_empty: includeEmpty,
     queried_at_utc: nowUtc()
   };
@@ -2647,17 +2655,39 @@ export const defiLpReadTools: Record<string, Tool> = {
     handler: getLBPairState
   },
 
-  // mantle_getV3Positions: TEMPORARILY DISABLED
-  // Agni's NonfungiblePositionManager does not implement ERC721Enumerable
-  // (no tokenOfOwnerByIndex). The event-based fallback also fails due to
-  // Mantle RPC block-range limits. Re-enable once a reliable enumeration
-  // strategy is implemented (subgraph, or paginated event scanning).
-  //
-  // mantle_getV3Positions: {
-  //   name: "mantle_getV3Positions",
-  //   ...
-  //   handler: getV3Positions
-  // },
+  // mantle_getV3Positions: re-enabled with Transfer-event log scanning to
+  // work around Agni's missing ERC721Enumerable. See discoverTokenIdsByEvents
+  // in this file. Partial scan failures surface as `warnings[]` in the result.
+  mantle_getV3Positions: {
+    name: "mantle_getV3Positions",
+    description:
+      "List Uniswap V3-compatible LP positions (Agni Finance or Fluxion) owned by an address on Mantle. For each position returns token_id, both tokens with metadata, fee tier, tick bounds, liquidity, uncollected fees (tokens_owed0/1), and whether the current price is in range.\n\nFalls back to Transfer event log scanning when the position manager does not implement ERC721Enumerable (Agni). Partial scan failures are surfaced via the optional `warnings` field — agents should check it.\n\nExamples:\n- All providers: owner='0x...'\n- Single provider: owner='0x...', provider='agni'\n- Include zero-liquidity NFTs (e.g. burned positions): include_empty=true",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: {
+          type: "string",
+          description: "Wallet address to query for V3 positions."
+        },
+        provider: {
+          type: "string",
+          description:
+            "DEX provider: 'agni' or 'fluxion'. Omit to scan both."
+        },
+        include_empty: {
+          type: "boolean",
+          description:
+            "When true, include positions with zero liquidity AND zero uncollected fees. Default false."
+        },
+        network: {
+          type: "string",
+          description: "Network: 'mainnet' (default) or 'sepolia'."
+        }
+      },
+      required: ["owner"]
+    },
+    handler: getV3Positions
+  },
 
   mantle_suggestTickRange: {
     name: "mantle_suggestTickRange",

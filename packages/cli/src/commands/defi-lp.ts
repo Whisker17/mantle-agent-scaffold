@@ -223,27 +223,109 @@ export function registerLp(parent: Command): void {
     });
 
   // ── positions ───────────────────────────────────────────────────────
-  // TEMPORARILY DISABLED: Agni's NonfungiblePositionManager lacks
-  // ERC721Enumerable. Re-enable once a reliable enumeration strategy
-  // (subgraph or paginated event scanning) is implemented.
+  // Enumerates LP positions for an owner. Routes by --provider:
+  //   merchant_moe → LB positions (ERC1155 bin balances)
+  //   agni / fluxion → V3 positions (NFT enumeration via Transfer logs)
+  //   omitted → scan both V3 providers (Agni + Fluxion)
+  // The underlying V3 path uses Transfer-event log scanning for managers
+  // that lack ERC721Enumerable (Agni). Partial scan failures surface in
+  // `result.warnings`.
   group
     .command("positions")
-    .description("[DISABLED] List V3 LP positions for an owner across Agni and Fluxion")
-    // NOTE: --owner is intentionally `.option` (not `.requiredOption`) so users
-    // who run `mantle-cli lp positions` without flags still see the friendly
-    // disabled message below instead of a "missing required option" error.
-    .option("--owner <address>", "wallet address to query (ignored — command is disabled)")
-    .option("--provider <provider>", "filter by provider: agni or fluxion")
-    .option("--include-empty", "include zero-liquidity positions", false)
-    .action(async () => {
-      console.error(
-        "\n  This command is temporarily disabled.\n\n" +
-        "  Agni's NonfungiblePositionManager does not implement ERC721Enumerable,\n" +
-        "  so on-chain position enumeration is unreliable. A fix using subgraph\n" +
-        "  or paginated event scanning is in progress.\n\n" +
-        "  Workaround: check positions on https://agni.finance or via Mantlescan.\n"
-      );
-      process.exitCode = 1;
+    .description("List LP positions for an owner. Routes by --provider: merchant_moe → LB, agni/fluxion → V3.")
+    .requiredOption("--owner <address>", "wallet address to query")
+    .option("--provider <provider>", "provider: merchant_moe | agni | fluxion (default: scan agni + fluxion)")
+    .option("--include-empty", "include zero-liquidity V3 positions", false)
+    .action(async (opts: Record<string, unknown>, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const providerRaw = typeof opts.provider === "string" ? opts.provider.toLowerCase() : undefined;
+
+      // ── Merchant Moe (LB) branch ───────────────────────────────────
+      if (providerRaw === "merchant_moe" || providerRaw === "moe") {
+        const result = await allTools["mantle_getLBPositions"].handler({
+          owner: opts.owner,
+          network: globals.network
+        });
+        if (globals.json) { formatJson(result); return; }
+        const data = result as Record<string, unknown> | undefined;
+        if (!data) { console.log("\n  Error: no data returned.\n"); return; }
+        const positions = (data.positions ?? []) as Record<string, unknown>[];
+        if (data.note) console.log(`\n  Note: ${data.note}`);
+        if (positions.length === 0) {
+          console.log("\n  No Merchant Moe LB positions found within scan range.\n");
+          return;
+        }
+        for (const pos of positions) {
+          const tokenX = (pos.token_x ?? {}) as Record<string, unknown>;
+          const tokenY = (pos.token_y ?? {}) as Record<string, unknown>;
+          console.log(
+            `\n  ${tokenX.symbol ?? "?"}/${tokenY.symbol ?? "?"} (bin step: ${pos.bin_step}) — ` +
+            `${pos.total_bins_with_liquidity} bins with liquidity`
+          );
+          const bins = (pos.bins ?? []) as Record<string, unknown>[];
+          formatTable(bins, [
+            { key: "bin_id", label: "Bin ID", align: "right" },
+            { key: "share_pct", label: "Share %", align: "right",
+              format: (v) => v != null ? `${v}%` : "?" },
+            { key: "user_amount_x", label: `Amount ${tokenX.symbol ?? "X"}`, align: "right",
+              format: (v) => v != null ? String(v) : "?" },
+            { key: "user_amount_y", label: `Amount ${tokenY.symbol ?? "Y"}`, align: "right",
+              format: (v) => v != null ? String(v) : "?" }
+          ]);
+        }
+        console.log();
+        return;
+      }
+
+      // ── V3 branch (Agni / Fluxion) ─────────────────────────────────
+      const result = await allTools["mantle_getV3Positions"].handler({
+        owner: opts.owner,
+        provider: opts.provider,
+        include_empty: opts.includeEmpty === true,
+        network: globals.network
+      });
+      if (globals.json) { formatJson(result); return; }
+      const data = result as Record<string, unknown> | undefined;
+      if (!data) { console.log("\n  Error: no data returned.\n"); return; }
+      const positions = (data.positions ?? []) as Record<string, unknown>[];
+      const warnings = (data.warnings ?? []) as Array<{ provider: string; warning: string }>;
+      const errors = (data.errors ?? []) as Array<{ provider: string; error: string }>;
+
+      if (positions.length === 0) {
+        console.log("\n  No V3 LP positions found for this owner.\n");
+      } else {
+        for (const pos of positions) {
+          const t0 = (pos.token0 ?? {}) as Record<string, unknown>;
+          const t1 = (pos.token1 ?? {}) as Record<string, unknown>;
+          console.log(
+            `\n  [${pos.provider}] ${t0.symbol ?? "?"}/${t1.symbol ?? "?"} ` +
+            `fee=${pos.fee} token_id=${pos.token_id} ` +
+            `ticks=[${pos.tick_lower},${pos.tick_upper}] ` +
+            `liquidity=${pos.liquidity} ` +
+            `in_range=${pos.in_range ? "yes" : "no"}`
+          );
+          if (pos.tokens_owed0 !== "0" || pos.tokens_owed1 !== "0") {
+            console.log(
+              `    uncollected fees: ${pos.tokens_owed0} ${t0.symbol ?? "token0"}, ` +
+              `${pos.tokens_owed1} ${t1.symbol ?? "token1"}`
+            );
+          }
+        }
+        console.log();
+      }
+      if (warnings.length > 0) {
+        console.log("  Warnings:");
+        for (const w of warnings) console.log(`    [${w.provider}] ${w.warning}`);
+        console.log();
+      }
+      if (errors.length > 0) {
+        console.log("  Errors:");
+        for (const e of errors) console.log(`    [${e.provider}] ${e.error}`);
+        console.log();
+        // When every provider failed and no positions came back, exit non-zero
+        // so scripts/CI can distinguish "scan failed" from "wallet is empty".
+        if (positions.length === 0) process.exitCode = 1;
+      }
     });
 
   // ── lb-positions ────────────────────────────────────────────────────

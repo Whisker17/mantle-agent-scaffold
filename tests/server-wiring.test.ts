@@ -43,6 +43,7 @@ describe("server wiring", () => {
       "mantle_getTokenPrices",
       "mantle_getTransactionReceipt",
       "mantle_getV3PoolState",
+      "mantle_getV3Positions",
       "mantle_parseUnits",
       "mantle_probeEndpoint",
       "mantle_queryIndexerSql",

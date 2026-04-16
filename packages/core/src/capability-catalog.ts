@@ -292,10 +292,10 @@ const CAPABILITIES: CapabilityEntry[] = [
     category: "query",
     mutates: false,
     auth: "required",
-    summary: "[DISABLED] V3 position enumeration is disabled: Agni's NonfungiblePositionManager lacks ERC721Enumerable and the Transfer-event fallback is unreliable on Mantle RPC. Use a block explorer (Mantlescan) or https://agni.finance to find your position token IDs, then pass them directly to mantle_buildCollectFees / mantle_buildRemoveLiquidity.",
-    cli_command: "mantle-cli lp positions --owner <address> --json  # disabled — prints a message",
+    summary: "List a wallet's Agni / Fluxion V3 LP positions: token_id, both tokens, fee tier, tick bounds, liquidity, uncollected fees, in-range flag. Falls back to Transfer event log scanning when the position manager lacks ERC721Enumerable (Agni). Partial scan failures surface in result.warnings.",
+    cli_command: "mantle-cli lp positions --owner <address> --json",
     example: "{ \"owner\": \"0x1234...\" }",
-    tags: ["LP", "position", "V3", "NFT", "wallet", "disabled"]
+    tags: ["LP", "position", "V3", "NFT", "wallet"]
   },
   {
     id: "mantle_getLBPositions",
