@@ -893,6 +893,91 @@ function wrapBuildHandler(
       // now pinned and the tx is signable as-is.
       result.is_broadcastable = true;
 
+      // ------------------------------------------------------------------
+      // Zero-transform signing payload.
+      //
+      // Agents consuming `unsigned_tx` directly have to rewrite `chainId`
+      // and `nonce` from integers to `0x`-prefixed hex strings before
+      // handing the tx to signers like Privy, and separately patch in a
+      // `from` field. That manual re-encoding was the root cause of the
+      // ~10 signature-format retries seen in the V3 benchmark run (and
+      // violates the Safety Card rule against modifying build output).
+      //
+      // We emit `signable_tx` with those exact transforms applied once,
+      // server-side, so agents can pipe it verbatim into the signer.
+      // Every other field is copied as-is — in particular `gas`,
+      // `maxFeePerGas`, `maxPriorityFeePerGas` are already hex strings
+      // from the pinning step above, so no re-serialization is needed.
+      //
+      // Invariants at this point: `sender` is non-null (MISSING_SIGNER
+      // was thrown above if missing), `nonce` is a number, `chainId` is
+      // a number. Fee fields may be absent if the chain has no
+      // baseFeePerGas — we copy through the same undefined-ness.
+      //
+      // If any deterministic field is unexpectedly missing (shouldn't
+      // happen with `is_broadcastable: true`, but be defensive against
+      // upstream regressions), we skip `signable_tx` rather than emit a
+      // half-populated payload that would silently wedge signers.
+      // ------------------------------------------------------------------
+      const utx = result.unsigned_tx;
+      if (
+        typeof sender === "string" &&
+        typeof utx.chainId === "number" &&
+        typeof utx.nonce === "number" &&
+        typeof utx.gas === "string"
+      ) {
+        const signableTx: {
+          from: string;
+          to: string;
+          data: string;
+          value: string;
+          chainId: string;
+          gas: string;
+          maxFeePerGas?: string;
+          maxPriorityFeePerGas?: string;
+          nonce: string;
+        } = {
+          // Checksummed EIP-55 form. `sender` is lowercase because it
+          // backs the idempotency key (which needs format-invariant
+          // dedupe), but `signable_tx.from` is an external-facing field
+          // consumed by signers — some strict signers validate EIP-55
+          // checksum, and checksummed is a lossless superset accepted by
+          // all lowercase consumers.
+          from: getAddress(sender),
+          to: utx.to,
+          data: utx.data,
+          value: utx.value,
+          chainId: "0x" + utx.chainId.toString(16),
+          gas: utx.gas,
+          nonce: "0x" + utx.nonce.toString(16),
+        };
+        if (typeof utx.maxFeePerGas === "string") {
+          signableTx.maxFeePerGas = utx.maxFeePerGas;
+        }
+        if (typeof utx.maxPriorityFeePerGas === "string") {
+          signableTx.maxPriorityFeePerGas = utx.maxPriorityFeePerGas;
+        }
+        result.signable_tx = signableTx;
+      } else {
+        // Defensive guard fired: `is_broadcastable` was already set to
+        // `true` above, but one of the deterministic fields isn't the
+        // expected type (upstream regression). Emit a warning so
+        // operators can detect the invariant violation instead of
+        // silently handing agents a broadcastable result with no
+        // `signable_tx` — which would reproduce the very retry loop
+        // this field exists to eliminate.
+        result.warnings = Array.isArray(result.warnings) ? result.warnings : [];
+        result.warnings.push(
+          "signable_tx omitted: upstream builder failed to populate chainId/nonce/gas on a broadcastable result (defensive guard)"
+        );
+      }
+
+      // Note: `signable_tx` is a derived view of `unsigned_tx`, so it
+      // does NOT participate in the idempotency key below. Two rebuilds
+      // that produce identical `unsigned_tx` also produce identical
+      // `signable_tx`; including it in the hash would be redundant and
+      // would couple the key format to the external signing schema.
+
       // Finding 2: include the pinned nonce in the idempotency key. Once
       // the builder pins nonce into unsigned_tx, two rebuilds that see
       // different pending nonces (e.g. because an unrelated wallet tx
@@ -981,6 +1066,73 @@ interface UnsignedTxResult {
      * distinct transaction.
      */
     nonce: number;
+  };
+  /**
+   * Zero-transform signing payload, shaped for EIP-1193 JSON-RPC signers
+   * (`eth_signTransaction` via `provider.request(...)`) — in particular
+   * the Privy Agent `sign evm-transaction` tool, which is the signer
+   * this field was designed against and empirically validated against
+   * in V3 benchmark logs.
+   *
+   * Semantically identical to `unsigned_tx`, but with every field
+   * already in the shape that stricter EIP-1193 signers demand:
+   *
+   *   - `chainId` / `nonce` are `0x`-prefixed hex strings, per the
+   *     Ethereum JSON-RPC QUANTITY encoding (EIP-1474: most-compact
+   *     hex, single-nibble values like `"0x7"` are spec-correct; zero
+   *     is represented as `"0x0"`).
+   *   - `from` is populated with the resolved signer address in
+   *     checksummed EIP-55 form. Note: for EIP-1559 (type-0x02)
+   *     transactions, `from` is NOT part of the signed payload — it
+   *     is recovered from the signature via ecrecover. The field is
+   *     supplied here as a wallet-selection hint for signers that
+   *     need to know which key to use (Privy), and is harmless for
+   *     signers that ignore it. Strict JSON-RPC nodes may drop it.
+   *   - `to` / `data` / `value` / `gas` / `maxFeePerGas` /
+   *     `maxPriorityFeePerGas` are the SAME hex strings as in
+   *     `unsigned_tx` (no re-encoding — byte-for-byte identical).
+   *
+   * **NOT the shape Privy's REST API uses directly.** Privy's REST
+   * `eth_signTransaction` endpoint takes `chain_id`, `gas_limit`,
+   * snake_case fee fields, and integer `nonce`/`chain_id`. Agents
+   * calling Privy's REST API raw will need to transform `signable_tx`
+   * further; agents calling `sign evm-transaction` via the Privy
+   * Agent tool (the V3-validated path) can pipe `signable_tx`
+   * verbatim.
+   *
+   * Why it exists: agents consuming `unsigned_tx` directly had to run
+   * ad-hoc Python/JS to convert `chainId: 5000` → `"0x1388"` and
+   * `nonce: 198` → `"0xc6"` before handing the tx to the signing tool,
+   * which (a) is error-prone (observed ~10 format-retry failures in V3
+   * logs) and (b) violates the Safety Card "do not modify unsigned_tx
+   * fields" rule. Consuming `signable_tx` directly is a drop-in
+   * substitute that preserves the determinism contract.
+   *
+   * Typically present on every broadcastable result. In the rare case
+   * that an upstream builder regression produces an `is_broadcastable:
+   * true` result with a missing/wrong-typed `chainId` / `nonce` / `gas`
+   * field, `signable_tx` is omitted and a diagnostic string is pushed
+   * to `warnings`. Callers MUST null-check before use even when
+   * `is_broadcastable === true`. Skip results (`_skip` intents) never
+   * carry `signable_tx` — there is nothing to sign.
+   */
+  signable_tx?: {
+    /**
+     * Resolved signer address (sender / owner / on_behalf_of), in
+     * checksummed EIP-55 form. Treated as a wallet-selection hint by
+     * Privy-style signers; not part of the EIP-1559 signed payload.
+     */
+    from: string;
+    to: string;
+    data: string;
+    value: string;
+    /** Hex-encoded chain ID (JSON-RPC QUANTITY), e.g. `"0x1388"` for Mantle mainnet (5000). */
+    chainId: string;
+    gas: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
+    /** Hex-encoded nonce (JSON-RPC QUANTITY), e.g. `"0xc6"` for 198, `"0x7"` for 7, `"0x0"` for 0. */
+    nonce: string;
   };
   /**
    * Deterministic, signer-scoped hash for deduplication.
