@@ -43,6 +43,13 @@ function priceProvider(confidence: "high" | "low" = "high") {
   };
 }
 
+function logSlippageCase(label: string, value: unknown) {
+  console.info(
+    `[slippage-detection] ${label}: ${JSON.stringify(value, (_key, item) =>
+      typeof item === "bigint" ? item.toString() : item, 2)}`
+  );
+}
+
 function quoteProvider(amountOutRaw: bigint = QUOTER_AMOUNT_OUT) {
   return async () => ({
     estimated_out_raw: amountOutRaw.toString(),
@@ -78,6 +85,14 @@ describe("getSwapQuote slippage detection", () => {
         now: () => "2026-04-22T12:00:00.000Z"
       }
     );
+    logSlippageCase("quote incident detection", {
+      estimated_out_decimal: result.estimated_out_decimal,
+      minimum_out_decimal: result.minimum_out_decimal,
+      fair_market_out_decimal: result.fair_market_out_decimal,
+      slippage_pct: result.slippage_pct,
+      price_confidence: result.price_confidence,
+      warnings: result.warnings
+    });
 
     expect(result.price_impact_pct).toBeNull();
     expect(result.slippage_pct).toBeGreaterThan(50);
@@ -112,6 +127,11 @@ describe("getSwapQuote slippage detection", () => {
         now: () => "2026-04-22T12:00:00.000Z"
       }
     );
+    logSlippageCase("low-confidence threshold", {
+      slippage_pct: result.slippage_pct,
+      price_confidence: result.price_confidence,
+      warnings: result.warnings
+    });
 
     expect(result.price_confidence).toBe("low");
     expect(result.slippage_pct).toBeGreaterThan(10);
@@ -191,6 +211,10 @@ describe("buildSwap slippage guard", () => {
     ).rejects.toMatchObject({
       code: "EXTREME_SLIPPAGE_REJECTED"
     } satisfies Partial<MantleMcpError>);
+    logSlippageCase("build extreme rejection", {
+      minimum_out_raw: minimumOutRaw.toString(),
+      expected_code: "EXTREME_SLIPPAGE_REJECTED"
+    });
   });
 
   it("warns but still builds for 5-30% value loss", async () => {
@@ -211,6 +235,10 @@ describe("buildSwap slippage guard", () => {
       },
       buildDeps
     );
+    logSlippageCase("build warning but allowed", {
+      intent: result.intent,
+      warnings: result.warnings
+    });
 
     expect(result.intent).toBe("swap");
     expect(result.warnings).toEqual(
@@ -236,6 +264,11 @@ describe("buildSwap slippage guard", () => {
         now: () => "2026-04-22T12:00:00.000Z"
       }
     );
+    logSlippageCase("end-to-end quote", {
+      minimum_out_raw: quote.minimum_out_raw,
+      slippage_pct: quote.slippage_pct,
+      warnings: quote.warnings
+    });
 
     const handler = defiWriteTools["mantle_buildSwap"].handler;
     await expect(
@@ -256,6 +289,10 @@ describe("buildSwap slippage guard", () => {
         buildDeps
       )
     ).rejects.toMatchObject({ code: "EXTREME_SLIPPAGE_REJECTED" });
+    logSlippageCase("end-to-end build", {
+      outcome: "blocked",
+      expected_code: "EXTREME_SLIPPAGE_REJECTED"
+    });
   });
 
   it("emits PRICE CHECK UNAVAILABLE and builds when price fetch throws", async () => {
@@ -279,6 +316,10 @@ describe("buildSwap slippage guard", () => {
         getCrossValidatedPrice: async () => { throw new Error("timeout"); }
       }
     );
+    logSlippageCase("price-check unavailable fallback", {
+      intent: result.intent,
+      warnings: result.warnings
+    });
 
     expect(result.intent).toBe("swap");
     expect(result.warnings).toEqual(
@@ -290,6 +331,7 @@ describe("buildSwap slippage guard", () => {
 describe("shared price oracle", () => {
   it("is the source of the three-source validation policy used by read/write/token paths", () => {
     const validation = crossValidatePrices(1, 1.01, 0.99);
+    logSlippageCase("shared oracle validation", validation);
 
     expect(validation.price).toBe(1);
     expect(validation.source).toBe("coingecko");
@@ -328,6 +370,7 @@ describe("pool discovery liquidity threshold", () => {
       "0x0000000000000000000000000000000000000003",
       { minLiquidityThreshold: 500n }
     );
+    logSlippageCase("pool discovery threshold", best);
 
     expect(best).toMatchObject({
       feeTier: 3000,
