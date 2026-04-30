@@ -1,0 +1,112 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ─── 🟣 Claude Review ─────────────────────────────────────────────
+  claude-review:
+    name: 🟣 Claude Review
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit outbound calls)
+        uses: step-security/harden-runner@002fdce3c6a235733a90a27c80493a3241e56863 # v2.12.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Load review prompt
+        id: prompt
+        run: |
+          PROMPT=$(cat .github/prompts/claude-review.md)
+          PROMPT="${PROMPT//__REPO__/${{ github.repository }}}"
+          PROMPT="${PROMPT//__PR_NUMBER__/${{ github.event.pull_request.number }}}"
+          {
+            echo "content<<PROMPT_DELIMITER"
+            echo "$PROMPT"
+            echo "PROMPT_DELIMITER"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude Code
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: https://${{ vars.LLM_GATEWAY_HOSTNAME }}
+        with:
+          anthropic_api_key: ${{ secrets.LLM_GATEWAY_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          track_progress: false
+          prompt: ${{ steps.prompt.outputs.content }}
+          claude_args: |
+            --model claude-opus-4-6-thinking
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment ${{ github.event.pull_request.number }} --body:*),Bash(gh pr comment ${{ github.event.pull_request.number }} --edit-last --body:*),Bash(gh pr comment ${{ github.event.pull_request.number }} --delete-last:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments:*),Bash(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments:*)"
+
+  # ─── 🟢 Codex Review ──────────────────────────────────────────────
+  codex-review:
+    name: 🟢 Codex Review
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit outbound calls)
+        uses: step-security/harden-runner@002fdce3c6a235733a90a27c80493a3241e56863 # v2.12.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
+      - name: Configure Codex gateway
+        run: |
+          mkdir -p ~/.codex
+          cat > ~/.codex/config.toml << TOML_EOF
+          model = "gpt-5.5"
+          model_provider = "gateway"
+
+          [model_providers.gateway]
+          name = "LLM Gateway"
+          base_url = "https://${{ vars.CODEX_GATEWAY_HOSTNAME }}"
+          env_key = "CODEX_API_KEY"
+          wire_api = "chat"
+          TOML_EOF
+
+      - name: Load and run Codex review
+        env:
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          # Load prompt and replace placeholders
+          PROMPT=$(cat .github/prompts/codex-review.md)
+          PROMPT="${PROMPT//__PR_NUMBER__/$PR_NUMBER}"
+          PROMPT="${PROMPT//__REPO__/$REPO}"
+
+          # Run Codex (exec subcommand for non-interactive CI)
+          codex exec --full-auto "$PROMPT"
