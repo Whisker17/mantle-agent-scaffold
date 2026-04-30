@@ -102,8 +102,10 @@ jobs:
           cat ~/.codex/config.toml
           echo "=== Codex version ==="
           codex --version || true
-          echo "=== Codex help (sandbox flags) ==="
-          codex exec --help 2>&1 | grep -i sandbox || true
+          echo "=== Codex help (main command sandbox) ==="
+          codex --help 2>&1 | grep -i sandbox || true
+          echo "=== Codex exec help ==="
+          codex exec --help 2>&1 || true
 
       - name: Load and run Codex review
         env:
@@ -118,5 +120,8 @@ jobs:
           PROMPT="${PROMPT//__PR_NUMBER__/$PR_NUMBER}"
           PROMPT="${PROMPT//__REPO__/$REPO}"
 
-          # Run Codex with sandbox disabled (-s flag, space-separated)
-          codex exec --full-auto -s danger-full-access "$PROMPT"
+          # Write prompt to file for reliable passing
+          echo "$PROMPT" > /tmp/codex-prompt.txt
+
+          # Try main codex command (not exec) with script for pseudo-TTY
+          script -qec "codex --full-auto -s danger-full-access \"\$(cat /tmp/codex-prompt.txt)\"" /dev/null
