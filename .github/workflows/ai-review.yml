@@ -88,7 +88,7 @@ jobs:
           cat > ~/.codex/config.toml << TOML_EOF
           model = "gpt-5.5"
           model_provider = "gateway"
-          sandbox_mode = "danger-full-access"
+          sandbox = "danger-full-access"
 
           [model_providers.gateway]
           name = "LLM Gateway"
@@ -100,6 +100,10 @@ jobs:
           # Verify config
           echo "=== Config file ==="
           cat ~/.codex/config.toml
+          echo "=== Codex version ==="
+          codex --version || true
+          echo "=== Codex help (sandbox flags) ==="
+          codex exec --help 2>&1 | grep -i sandbox || true
 
       - name: Load and run Codex review
         env:
@@ -114,5 +118,5 @@ jobs:
           PROMPT="${PROMPT//__PR_NUMBER__/$PR_NUMBER}"
           PROMPT="${PROMPT//__REPO__/$REPO}"
 
-          # Run Codex with sandbox explicitly disabled via CLI flag
-          codex exec --full-auto --sandbox=danger-full-access "$PROMPT"
+          # Run Codex with sandbox disabled (-s flag, space-separated)
+          codex exec --full-auto -s danger-full-access "$PROMPT"
