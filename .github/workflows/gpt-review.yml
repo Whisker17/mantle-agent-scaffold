@@ -144,5 +144,5 @@ jobs:
           sed -i "s/__PR_NUMBER__/$PR_NUMBER/g" /tmp/codex-review-prompt.txt
           sed -i "s|__REPO__|$REPO|g" /tmp/codex-review-prompt.txt
 
-          # Run Codex
-          codex --full-auto --model gpt-5.5 "$(cat /tmp/codex-review-prompt.txt)"
+          # Run Codex (use exec subcommand for non-interactive CI environment)
+          codex exec --full-auto --model gpt-5.5 "$(cat /tmp/codex-review-prompt.txt)"
