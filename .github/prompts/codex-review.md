@@ -52,7 +52,7 @@ gh api repos/__REPO__/issues/__PR_NUMBER__/comments --jq '.[] | select(.body | c
 For each of Claude's inline comments (if any):
 1. Read the comment and understand what issue Claude raised
 2. Look at the same code location and form your own opinion
-3. If you AGREE with Claude — do NOT post a duplicate. Skip it.
+3. If you AGREE with Claude — leave a visible acknowledgement instead of skipping it. Post a short inline comment at the same file and line starting with "🟢 **Codex:** Regarding Claude's comment above:" and say that you agree, with at most one concise reason. Do not restate the full issue.
 4. If you DISAGREE with Claude or have a DIFFERENT perspective — post your own inline comment at the same location explaining your view. Start with "🟢 **Codex:** Regarding Claude's comment above:" and explain why you see it differently.
 5. If you find NEW issues that Claude missed — post inline comments for those too.
 
@@ -90,6 +90,6 @@ If Claude has not posted yet, write: 'Claude review not yet available at time of
 ## Important Rules
 
 - Prefix ALL your comments with "🟢 **Codex:**"
-- Do NOT repeat issues Claude already raised correctly
+- Do NOT repeat the full details of issues Claude already raised correctly; leave only a short agreement note when you agree
 - Do NOT post praise or filler — if you agree with everything and have nothing to add, just post a brief summary saying so
 - Be specific and actionable in your feedback

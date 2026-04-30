@@ -65,7 +65,7 @@ gh api repos/__REPO__/issues/__PR_NUMBER__/comments --jq '.[] | select(.body | c
 ```
 
 If Codex has posted comments:
-- If you AGREE — do not duplicate. Skip it.
+- If you AGREE — leave a visible acknowledgement instead of skipping it. Post a short inline comment at the same file and line: "🟣 **Claude:** Regarding Codex's point above: I agree." You may add at most one concise reason, but do not restate the full issue.
 - If you DISAGREE — post your own inline comment at the same location: "🟣 **Claude:** Regarding Codex's point above: ..." and explain your perspective.
 - Include a "Cross-Review of Codex's Findings" section in your summary.
 
@@ -79,6 +79,7 @@ gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select(.user.logi
 ```
 Do NOT post a comment if there is already a comment from github-actions[bot] on the same file raising the same or substantially similar issue.
 Only post new findings that haven't been raised before.
+This duplicate-avoidance rule does not block short cross-review acknowledgement comments when you agree with a Codex inline comment.
 
 ## Comment Management
 
