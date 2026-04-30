@@ -75,9 +75,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -92,7 +89,8 @@ jobs:
           cat > ~/.codex/config.toml << TOML_EOF
           model = "gpt-5.5"
           model_provider = "gateway"
-          sandbox = "danger-full-access"
+          approval_policy = "never"
+          sandbox_mode = "danger-full-access"
 
           [model_providers.gateway]
           name = "LLM Gateway"
@@ -103,8 +101,8 @@ jobs:
 
           echo "=== Config file ==="
           cat ~/.codex/config.toml
-          echo "=== bwrap location ==="
-          which bwrap && bwrap --version || true
+          echo "=== Codex CLI ==="
+          codex --version
 
       - name: Load and run Codex review
         timeout-minutes: 20
@@ -120,5 +118,7 @@ jobs:
           PROMPT="${PROMPT//__PR_NUMBER__/$PR_NUMBER}"
           PROMPT="${PROMPT//__REPO__/$REPO}"
 
-          # Run Codex (exec for non-interactive CI, system bwrap now available)
-          codex exec --full-auto -s danger-full-access "$PROMPT"
+          # Run Codex without its internal Linux sandbox; GitHub Actions is the
+          # external runner boundary. Do not combine this with --full-auto, which
+          # forces Codex back into workspace-write sandbox mode.
+          codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT"
