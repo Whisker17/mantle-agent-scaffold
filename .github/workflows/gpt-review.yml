@@ -145,4 +145,4 @@ jobs:
           sed -i "s|__REPO__|$REPO|g" /tmp/codex-review-prompt.txt
 
           # Run Codex
-          codex --approval-mode full-auto --model gpt-5.5 "$(cat /tmp/codex-review-prompt.txt)"
+          codex --full-auto --model o4-mini "$(cat /tmp/codex-review-prompt.txt)"
