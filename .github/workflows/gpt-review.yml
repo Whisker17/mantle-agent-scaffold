@@ -54,11 +54,19 @@ jobs:
         if: steps.pr.outputs.skip != 'true'
         run: npm install -g @openai/codex
 
+      - name: Configure Codex gateway
+        if: steps.pr.outputs.skip != 'true'
+        run: |
+          mkdir -p ~/.codex
+          cat > ~/.codex/config.toml << EOF
+          model = "gpt-5.5"
+          openai_base_url = "https://${{ vars.CODEX_GATEWAY_HOSTNAME }}/v1"
+          EOF
+
       - name: Run Codex Review
         if: steps.pr.outputs.skip != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.CODEX_API_KEY }}
-          OPENAI_BASE_URL: https://${{ vars.CODEX_GATEWAY_HOSTNAME }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER="${{ steps.pr.outputs.pr_number }}"
@@ -146,4 +154,4 @@ jobs:
           sed -i "s|__REPO__|$REPO|g" /tmp/codex-review-prompt.txt
 
           # Run Codex (use exec subcommand for non-interactive CI environment)
-          codex exec --full-auto --model gpt-5.5 "$(cat /tmp/codex-review-prompt.txt)"
+          codex exec --full-auto "$(cat /tmp/codex-review-prompt.txt)"
