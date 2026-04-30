@@ -60,7 +60,7 @@ jobs:
           mkdir -p ~/.codex
           cat > ~/.codex/config.toml << EOF
           model = "gpt-5.5"
-          openai_base_url = "https://${{ vars.CODEX_GATEWAY_HOSTNAME }}/v1"
+          openai_base_url = "https://${{ vars.CODEX_GATEWAY_HOSTNAME }}"
           EOF
 
       - name: Run Codex Review
