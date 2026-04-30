@@ -92,7 +92,7 @@ jobs:
           name = "LLM Gateway"
           base_url = "https://${{ vars.CODEX_GATEWAY_HOSTNAME }}"
           env_key = "CODEX_API_KEY"
-          wire_api = "chat"
+          wire_api = "responses"
           TOML_EOF
 
       - name: Load and run Codex review
