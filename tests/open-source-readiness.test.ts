@@ -29,4 +29,16 @@ describe("open source readiness", () => {
     expect(workflow).toContain("npm test");
     expect(workflow).toContain("npm run docs:build");
   });
+
+  it("loads AI review prompts from the shared prompt repository", () => {
+    expect(existsSync(".github/workflows/ai-review.yml")).toBe(true);
+
+    const workflow = readFileSync(".github/workflows/ai-review.yml", "utf8");
+    expect(workflow).toContain("MANTLE_PROMPTS_REPOSITORY: Whisker17/mantle-prompts");
+    expect(workflow).toContain("repository: ${{ env.MANTLE_PROMPTS_REPOSITORY }}");
+    expect(workflow).toContain("prompts/pr/adversarial-review/v1/codex-initial-review.md");
+    expect(workflow).toContain("prompts/pr/adversarial-review/v1/claude-second-pass-review.md");
+    expect(workflow).toContain("prompts/pr/adversarial-review/v1/codex-final-review.md");
+    expect(workflow).not.toContain("cat .github/prompts/");
+  });
 });
