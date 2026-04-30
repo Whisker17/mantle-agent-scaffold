@@ -58,6 +58,7 @@ jobs:
         if: steps.pr.outputs.skip != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          OPENAI_BASE_URL: https://${{ vars.CODEX_GATEWAY_HOSTNAME }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER="${{ steps.pr.outputs.pr_number }}"
