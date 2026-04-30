@@ -35,6 +35,7 @@ Run these commands before reviewing:
 
 ```bash
 gh pr view __PR_NUMBER__ --json number,title,body,labels,files,commits,baseRefName,headRefName,headRefOid
+gh pr diff __PR_NUMBER__ --name-only
 gh pr diff __PR_NUMBER__
 ```
 
@@ -61,6 +62,43 @@ Privately establish:
 - Which Claude comments are false positives, understated, overstated, or actionable
 - Which high-risk paths still have not been challenged
 </context_collection>
+
+<mandatory_review_workflow>
+Do not let this pass collapse into comment reconciliation. Complete a fresh adversarial review plus cross-review before posting the final summary:
+
+1. Build a changed-file ledger from the PR file list. Classify every changed file as one or more of:
+   source, test, docs, config, workflow, package-boundary, CLI, MCP, RPC/network, AI-integration, generated/lockfile.
+2. For every changed source, CLI, MCP, RPC/network, AI-integration, or package-boundary file:
+   - open the full changed file, not just the diff
+   - identify exported functions/types, command handlers, tool handlers, env vars, schemas, public package exports, and external IO boundaries touched by the PR
+   - run `rg` searches for relevant call sites, imports, command names, tool names, env vars, exported symbols, or package entry points
+   - inspect at least one relevant caller or consumer when a changed symbol has callers
+3. For every changed production file, inspect nearby tests, fixtures, or e2e coverage where they exist. If no relevant tests exist, record that as evidence.
+4. Build a failure-scenario ledger independent of Claude. For non-doc PRs, consider at least:
+   - one malformed or missing input scenario
+   - one timeout, retry, partial failure, or degraded dependency scenario when external IO is present
+   - one compatibility or downstream consumer scenario when exports, schemas, CLI contracts, or MCP tools change
+   - one concurrency, ordering, stale state, or cleanup scenario when async code changes
+5. Cross-review every Claude top-level finding and every Claude reply to a Codex initial finding. For each, record final disposition: confirmed, disputed, modified severity, duplicate, or not material.
+6. Compare your fresh failure-scenario ledger against Codex initial findings and Claude findings. Post new final findings only for material gaps or materially corrected conclusions.
+
+If a required workflow item is not applicable, record why in the evidence ledger. "Not applicable" is acceptable; silently skipping is not.
+The evidence ledger must include the exact commands or file reads used as evidence, not generic claims like "checked call sites".
+If the PR changes source code and the evidence ledger contains no `rg` command, the review is incomplete.
+If the PR changes source code and the evidence ledger contains no full-file inspection, the review is incomplete.
+</mandatory_review_workflow>
+
+<no_early_exit_gate>
+You may not post the final summary until both ledgers are complete:
+- fresh evidence ledger for the PR itself
+- cross-review disposition ledger for Claude's comments and replies
+
+You may not use `approve` unless every changed file has a classification and disposition.
+You may not use `approve` for source changes unless you inspected relevant call sites or explicitly found there are none.
+You may not use `approve` for public API, package export, CLI, MCP tool, schema, workflow, or config changes unless you traced at least one downstream or runtime consequence.
+You may not skip the fresh review just because Claude reviewed the PR.
+If the review would otherwise finish in a few minutes, continue executing the mandatory workflow instead of concluding early.
+</no_early_exit_gate>
 
 <operating_stance>
 Default to skepticism.
@@ -199,6 +237,20 @@ gh pr comment __PR_NUMBER__ --body "<!-- CODEX_FINAL_REVIEW_SUMMARY -->
 **Claude replies reviewed:** [count]
 **Validation:** [what you ran or why validation was not run]
 
+### Evidence Ledger
+- Changed files classified: [count and categories]
+- Full files inspected: [paths and how they were opened]
+- Call-site/export searches: [exact `rg` commands or exact reason none were applicable]
+- Tests/fixtures inspected: [paths, search commands, or 'none found' with search evidence]
+- Failure scenarios considered: [short bullets]
+- Findings rejected as non-material: [count and one-line reasons]
+
+### Claude Disposition Ledger
+- Confirmed: [count and short list]
+- Disputed: [count and short list]
+- Modified severity/fix: [count and short list]
+- Duplicate/not material: [count and short list]
+
 ### Final Disposition
 [which issues remain blocking, which were confirmed, which were disputed]
 
@@ -229,6 +281,7 @@ If Claude's finding is correct, say so concisely.
 If Claude's finding is wrong, explain the concrete reason.
 If the change looks safe after adversarial review and cross-review, say so directly and post no new final inline findings.
 Do not post praise or "looks good".
+The evidence ledger and Claude disposition ledger are not filler; they are mandatory proof that the final review actually happened.
 </calibration_rules>
 
 <final_check>
@@ -238,6 +291,14 @@ Before posting or summarizing, check that each finding or reply is:
 - plausible under a real failure scenario
 - actionable for an engineer fixing or triaging the issue
 - not already covered by an existing bot comment or Codex final reply
+
+Also check that the evidence ledger proves:
+- every changed file was classified
+- every changed source or public-boundary file had full-file context inspected
+- relevant call sites or consumers were searched
+- relevant tests or the absence of tests were checked
+- every Claude top-level finding and reply has a final disposition
+- approve was not used as a shortcut around missing evidence
 </final_check>
 
 <repository_context>

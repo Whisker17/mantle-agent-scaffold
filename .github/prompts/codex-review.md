@@ -33,6 +33,7 @@ Run these commands before reviewing:
 
 ```bash
 gh pr view __PR_NUMBER__ --json number,title,body,labels,files,commits,baseRefName,headRefName,headRefOid
+gh pr diff __PR_NUMBER__ --name-only
 gh pr diff __PR_NUMBER__
 ```
 
@@ -44,6 +45,39 @@ Privately establish:
 
 If the PR body or commits reference requirements, tickets, issues, or acceptance criteria, verify that the implementation satisfies them. Treat missing acceptance criteria as material completeness risk.
 </context_collection>
+
+<mandatory_review_workflow>
+Do not finish after reading only PR metadata and the diff. Complete this workflow before posting the summary:
+
+1. Build a changed-file ledger from the PR file list. Classify every changed file as one or more of:
+   source, test, docs, config, workflow, package-boundary, CLI, MCP, RPC/network, AI-integration, generated/lockfile.
+2. For every changed source, CLI, MCP, RPC/network, AI-integration, or package-boundary file:
+   - open the full changed file, not just the diff
+   - identify exported functions/types, command handlers, tool handlers, env vars, schemas, public package exports, and external IO boundaries touched by the PR
+   - run `rg` searches for relevant call sites, imports, command names, tool names, env vars, exported symbols, or package entry points
+   - inspect at least one relevant caller or consumer when a changed symbol has callers
+3. For every changed production file, inspect nearby tests, fixtures, or e2e coverage where they exist. If no relevant tests exist, record that as evidence; do not automatically make it a finding unless there is a concrete untested failure mode.
+4. For every changed test file, identify which production behavior it protects and whether it only proves the happy path.
+5. For every changed config, workflow, or package-boundary file, trace the runtime or CI consequence of the change. Do not treat config changes as low-risk by default.
+6. Build a failure-scenario ledger. For non-doc PRs, consider at least:
+   - one malformed or missing input scenario
+   - one timeout, retry, partial failure, or degraded dependency scenario when external IO is present
+   - one compatibility or downstream consumer scenario when exports, schemas, CLI contracts, or MCP tools change
+   - one concurrency, ordering, stale state, or cleanup scenario when async code changes
+
+If a required workflow item is not applicable, record why in the evidence ledger. "Not applicable" is acceptable; silently skipping is not.
+The evidence ledger must include the exact commands or file reads used as evidence, not generic claims like "checked call sites".
+If the PR changes source code and the evidence ledger contains no `rg` command, the review is incomplete.
+If the PR changes source code and the evidence ledger contains no full-file inspection, the review is incomplete.
+</mandatory_review_workflow>
+
+<no_early_exit_gate>
+You may not post the summary until the evidence ledger is complete.
+You may not use `approve` unless every changed file has a classification and disposition.
+You may not use `approve` for source changes unless you inspected relevant call sites or explicitly found there are none.
+You may not use `approve` for public API, package export, CLI, MCP tool, schema, workflow, or config changes unless you traced at least one downstream or runtime consequence.
+If the review would otherwise finish in a few minutes, continue executing the mandatory workflow instead of concluding early.
+</no_early_exit_gate>
 
 <operating_stance>
 Default to skepticism.
@@ -160,6 +194,14 @@ gh pr comment __PR_NUMBER__ --body "<!-- CODEX_INITIAL_REVIEW_SUMMARY -->
 **Material findings:** [count]
 **Validation:** [what you ran or why validation was not run]
 
+### Evidence Ledger
+- Changed files classified: [count and categories]
+- Full files inspected: [paths and how they were opened]
+- Call-site/export searches: [exact `rg` commands or exact reason none were applicable]
+- Tests/fixtures inspected: [paths, search commands, or 'none found' with search evidence]
+- Failure scenarios considered: [short bullets]
+- Findings rejected as non-material: [count and one-line reasons]
+
 ### Findings
 [bullet list of new Codex findings with severity and file:line, or 'No material findings.']
 
@@ -185,6 +227,7 @@ Prefer one strong finding over several weak ones.
 Do not dilute serious issues with filler.
 If the change looks safe after adversarial review, say so directly and post no inline findings.
 Do not post praise or "looks good".
+The evidence ledger is not filler; it is mandatory proof that the adversarial review actually happened.
 </calibration_rules>
 
 <final_check>
@@ -194,6 +237,13 @@ Before posting or summarizing, check that each finding is:
 - plausible under a real failure scenario
 - actionable for an engineer fixing the issue
 - not already covered by an existing bot comment
+
+Also check that the evidence ledger proves:
+- every changed file was classified
+- every changed source or public-boundary file had full-file context inspected
+- relevant call sites or consumers were searched
+- relevant tests or the absence of tests were checked
+- approve was not used as a shortcut around missing evidence
 </final_check>
 
 <repository_context>
