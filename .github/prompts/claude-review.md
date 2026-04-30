@@ -60,13 +60,18 @@ Another AI reviewer (Codex, signed as 🟢 **Codex:**) is reviewing this PR in p
 After completing your own review, check if Codex has already posted any comments:
 
 ```
-gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select(.body | contains("🟢 **Codex:**")) | {path, line, body}'
+gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select((.body | contains("🟢 **Codex:**")) and (.in_reply_to_id == null)) | {id, path, line, body}'
 gh api repos/__REPO__/issues/__PR_NUMBER__/comments --jq '.[] | select(.body | contains("CODEX_REVIEW_SUMMARY")) | {body}'
 ```
 
 If Codex has posted comments:
-- If you AGREE — leave a visible acknowledgement instead of skipping it. Post a short inline comment at the same file and line: "🟣 **Claude:** Regarding Codex's point above: I agree." You may add at most one concise reason, but do not restate the full issue.
-- If you DISAGREE — post your own inline comment at the same location: "🟣 **Claude:** Regarding Codex's point above: ..." and explain your perspective.
+- Before replying to a Codex comment, check whether this same top-level comment already has a Claude reply:
+  `gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select(.in_reply_to_id == <comment_id> and (.body | contains("🟣 **Claude:**"))) | {id, body}'`
+  If a Claude reply already exists for that comment, skip it.
+- If you AGREE — reply directly to Codex's existing review comment thread, not as a new inline comment. Use:
+  `gh api repos/__REPO__/pulls/__PR_NUMBER__/comments/<comment_id>/replies -X POST -f body="🟣 **Claude:** Regarding Codex's point above: I agree. <optional concise reason>"`
+  Keep it short and do not restate the full issue.
+- If you DISAGREE — reply directly to Codex's existing review comment thread using the same `/comments/<comment_id>/replies` endpoint. Start with "🟣 **Claude:** Regarding Codex's point above: ..." and explain your perspective.
 - Include a "Cross-Review of Codex's Findings" section in your summary.
 
 If Codex has NOT posted yet, skip the cross-review section.
@@ -79,7 +84,7 @@ gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select(.user.logi
 ```
 Do NOT post a comment if there is already a comment from github-actions[bot] on the same file raising the same or substantially similar issue.
 Only post new findings that haven't been raised before.
-This duplicate-avoidance rule does not block short cross-review acknowledgement comments when you agree with a Codex inline comment.
+This duplicate-avoidance rule does not block one short cross-review reply when you agree with a Codex inline comment.
 
 ## Comment Management
 

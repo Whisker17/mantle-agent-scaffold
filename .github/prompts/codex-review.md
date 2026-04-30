@@ -45,16 +45,21 @@ Another AI reviewer (Claude, signed as 🟣 **Claude:**) is reviewing this PR in
 After completing your own review, check if Claude has already posted any comments:
 
 ```
-gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select(.body | contains("🟣 **Claude:**")) | {path, line, body}'
+gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select((.body | contains("🟣 **Claude:**")) and (.in_reply_to_id == null)) | {id, path, line, body}'
 gh api repos/__REPO__/issues/__PR_NUMBER__/comments --jq '.[] | select(.body | contains("CLAUDE_REVIEW_SUMMARY")) | {body}'
 ```
 
 For each of Claude's inline comments (if any):
 1. Read the comment and understand what issue Claude raised
 2. Look at the same code location and form your own opinion
-3. If you AGREE with Claude — leave a visible acknowledgement instead of skipping it. Post a short inline comment at the same file and line starting with "🟢 **Codex:** Regarding Claude's comment above:" and say that you agree, with at most one concise reason. Do not restate the full issue.
-4. If you DISAGREE with Claude or have a DIFFERENT perspective — post your own inline comment at the same location explaining your view. Start with "🟢 **Codex:** Regarding Claude's comment above:" and explain why you see it differently.
-5. If you find NEW issues that Claude missed — post inline comments for those too.
+3. Before replying, check whether this same top-level comment already has a Codex reply:
+   `gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --jq '.[] | select(.in_reply_to_id == <comment_id> and (.body | contains("🟢 **Codex:**"))) | {id, body}'`
+   If a Codex reply already exists for that comment, skip it.
+4. If you AGREE with Claude — reply directly to Claude's existing review comment thread, not as a new inline comment. Use:
+   `gh api repos/__REPO__/pulls/__PR_NUMBER__/comments/<comment_id>/replies -X POST -f body="🟢 **Codex:** Regarding Claude's comment above: I agree. <optional concise reason>"`
+   Keep it short and do not restate the full issue.
+5. If you DISAGREE with Claude or have a DIFFERENT perspective — reply directly to Claude's existing review comment thread using the same `/comments/<comment_id>/replies` endpoint. Start with "🟢 **Codex:** Regarding Claude's comment above:" and explain why you see it differently.
+6. If you find NEW issues that Claude missed — post inline comments for those too.
 
 If Claude has NOT posted yet, skip the cross-review section.
 
@@ -90,6 +95,6 @@ If Claude has not posted yet, write: 'Claude review not yet available at time of
 ## Important Rules
 
 - Prefix ALL your comments with "🟢 **Codex:**"
-- Do NOT repeat the full details of issues Claude already raised correctly; leave only a short agreement note when you agree
+- Do NOT repeat the full details of issues Claude already raised correctly; leave only a short reply in Claude's existing review comment thread when you agree
 - Do NOT post praise or filler — if you agree with everything and have nothing to add, just post a brief summary saying so
 - Be specific and actionable in your feedback
