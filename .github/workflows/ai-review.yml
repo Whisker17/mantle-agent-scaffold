@@ -17,6 +17,7 @@ env:
   MANTLE_PROMPTS_REPOSITORY: Whisker17/mantle-prompts
   MANTLE_PROMPTS_REF: main
   MANTLE_PROMPTS_DIR: .mantle-prompts
+  MANTLE_PROMPTS_PROFILE: profiles/repositories/Whisker17/mantle-agent-scaffold.json
 
 jobs:
   # ─── 🟢 Codex Initial Review ──────────────────────────────────────
@@ -84,9 +85,14 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
 
-          PROMPT=$(cat "$MANTLE_PROMPTS_DIR/prompts/pr/adversarial-review/v1/codex-initial-review.md")
-          PROMPT="${PROMPT//__PR_NUMBER__/$PR_NUMBER}"
-          PROMPT="${PROMPT//__REPO__/$REPO}"
+          PROMPT=$(
+            python3 .github/scripts/render-shared-prompt.py \
+              --prompts-dir "$MANTLE_PROMPTS_DIR" \
+              --prompt-path "prompts/adversarial-review/codex-initial-review.md" \
+              --profile-path "$MANTLE_PROMPTS_PROFILE" \
+              --repo "$REPO" \
+              --pr-number "$PR_NUMBER"
+          )
 
           CODEX_FINAL="$RUNNER_TEMP/codex-review-final.md"
           CODEX_LOG="$RUNNER_TEMP/codex-review.log"
@@ -134,9 +140,17 @@ jobs:
       - name: Load review prompt
         id: prompt
         run: |
-          PROMPT=$(cat "$MANTLE_PROMPTS_DIR/prompts/pr/adversarial-review/v1/claude-second-pass-review.md")
-          PROMPT="${PROMPT//__REPO__/${{ github.repository }}}"
-          PROMPT="${PROMPT//__PR_NUMBER__/${{ github.event.pull_request.number }}}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          PROMPT=$(
+            python3 .github/scripts/render-shared-prompt.py \
+              --prompts-dir "$MANTLE_PROMPTS_DIR" \
+              --prompt-path "prompts/adversarial-review/claude-second-pass-review.md" \
+              --profile-path "$MANTLE_PROMPTS_PROFILE" \
+              --repo "$REPO" \
+              --pr-number "$PR_NUMBER"
+          )
           {
             echo "content<<PROMPT_DELIMITER"
             echo "$PROMPT"
@@ -223,9 +237,14 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
 
-          PROMPT=$(cat "$MANTLE_PROMPTS_DIR/prompts/pr/adversarial-review/v1/codex-final-review.md")
-          PROMPT="${PROMPT//__PR_NUMBER__/$PR_NUMBER}"
-          PROMPT="${PROMPT//__REPO__/$REPO}"
+          PROMPT=$(
+            python3 .github/scripts/render-shared-prompt.py \
+              --prompts-dir "$MANTLE_PROMPTS_DIR" \
+              --prompt-path "prompts/adversarial-review/codex-final-review.md" \
+              --profile-path "$MANTLE_PROMPTS_PROFILE" \
+              --repo "$REPO" \
+              --pr-number "$PR_NUMBER"
+          )
 
           CODEX_FINAL="$RUNNER_TEMP/codex-final-review-final.md"
           CODEX_LOG="$RUNNER_TEMP/codex-final-review.log"
